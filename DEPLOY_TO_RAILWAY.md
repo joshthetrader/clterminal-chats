@@ -8,9 +8,11 @@ Upload these files from the `server/` directory to your GitHub repo:
 2. `package.json` - Dependencies and scripts
 3. `package-lock.json` - Locked dependency versions
 4. `Procfile` - Railway process definition
-5. `.gitignore` - Git ignore rules
-6. `SECURITY.md` - Security documentation
-7. `railway.json` - Railway configuration
+5. `railway.toml` - Railway configuration (prevents server starting during build)
+6. `.railwayignore` - Files to ignore during deployment
+7. `.gitignore` - Git ignore rules
+8. `SECURITY.md` - Security documentation
+9. `railway.json` - Railway configuration
 
 ## Railway Configuration
 
