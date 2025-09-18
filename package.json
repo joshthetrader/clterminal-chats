@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "NODE_ENV=development node src/index.js"
+    "dev": "NODE_ENV=development node src/index.js",
+    "build": "echo 'No build step required'"
   },
   "dependencies": {
     "@fastify/cors": "^8.5.0",
