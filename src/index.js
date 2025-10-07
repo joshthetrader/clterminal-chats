@@ -315,11 +315,15 @@ app.options('/api/blofin/*', async (req, reply) => {
   setPreflightHeaders(reply, 'Content-Type, ACCESS-KEY, ACCESS-SIGN, ACCESS-TIMESTAMP, ACCESS-PASSPHRASE, ACCESS-NONCE, BROKER-ID');
   return reply.send();
 });
-app.all('/api/blofin/*', async (req, reply) => {
-  const suffix = req.params['*'] || '';
-  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-  const upstream = buildUpstreamUrl('https://openapi.blofin.com/', suffix, search);
-  return forwardRequest(upstream, req, reply, BLOFIN_ALLOWED_HEADERS);
+app.route({
+  method: ['GET','POST','PUT','DELETE'],
+  url: '/api/blofin/*',
+  handler: async (req, reply) => {
+    const suffix = req.params['*'] || '';
+    const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+    const upstream = buildUpstreamUrl('https://openapi.blofin.com/', suffix, search);
+    return forwardRequest(upstream, req, reply, BLOFIN_ALLOWED_HEADERS);
+  }
 });
 
 // Bitunix forwarder (public)
@@ -327,11 +331,15 @@ app.options('/api/bitunix/*', async (req, reply) => {
   setPreflightHeaders(reply, 'Content-Type');
   return reply.send();
 });
-app.all('/api/bitunix/*', async (req, reply) => {
-  const suffix = req.params['*'] || '';
-  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-  const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
-  return forwardRequest(upstream, req, reply, new Set(['content-type']));
+app.route({
+  method: ['GET','POST','PUT','DELETE'],
+  url: '/api/bitunix/*',
+  handler: async (req, reply) => {
+    const suffix = req.params['*'] || '';
+    const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+    const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
+    return forwardRequest(upstream, req, reply, new Set(['content-type']));
+  }
 });
 
 // Bitunix forwarder (private)
@@ -339,19 +347,27 @@ app.options('/api/bitunix-private/*', async (req, reply) => {
   setPreflightHeaders(reply, 'Content-Type, api-key, sign, timestamp, nonce');
   return reply.send();
 });
-app.all('/api/bitunix-private/*', async (req, reply) => {
-  const suffix = req.params['*'] || '';
-  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-  const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
-  return forwardRequest(upstream, req, reply, BITUNIX_ALLOWED_HEADERS);
+app.route({
+  method: ['GET','POST','PUT','DELETE'],
+  url: '/api/bitunix-private/*',
+  handler: async (req, reply) => {
+    const suffix = req.params['*'] || '';
+    const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+    const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
+    return forwardRequest(upstream, req, reply, BITUNIX_ALLOWED_HEADERS);
+  }
 });
 
 // Bitunix alt host (api.bitunix.com)
-app.all('/api/bitunix-alt/*', async (req, reply) => {
-  const suffix = req.params['*'] || '';
-  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-  const upstream = buildUpstreamUrl('https://api.bitunix.com/', suffix, search);
-  return forwardRequest(upstream, req, reply, new Set(['content-type']));
+app.route({
+  method: ['GET','POST','PUT','DELETE'],
+  url: '/api/bitunix-alt/*',
+  handler: async (req, reply) => {
+    const suffix = req.params['*'] || '';
+    const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+    const upstream = buildUpstreamUrl('https://api.bitunix.com/', suffix, search);
+    return forwardRequest(upstream, req, reply, new Set(['content-type']));
+  }
 });
 
 // News: fetch last N items
