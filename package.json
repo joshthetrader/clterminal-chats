@@ -1,6 +1,6 @@
 {
   "name": "crypto-legends-chat-server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Real-time chat and trade-share backend for Crypto Legends Terminal",
   "main": "src/index.js",
   "type": "commonjs",
