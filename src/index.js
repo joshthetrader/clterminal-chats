@@ -775,23 +775,57 @@ function connectBWE() {
     
     ws.on('message', (buf) => {
       try {
-        const data = JSON.parse(buf.toString());
+        const raw = buf.toString();
         
-        // BWE sends alerts in format: { symbol, price, changePercent, volume, etc }
-        if (data && data.symbol) {
+        // Log first message to understand BWE format
+        if (!ws._firstMessageLogged) {
+          console.log('[BWE] First message received:', raw.slice(0, 500));
+          ws._firstMessageLogged = true;
+        }
+        
+        // Try to parse as JSON
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (parseError) {
+          // BWE might send non-JSON messages (pings, etc)
+          if (raw.length < 100) {
+            console.log('[BWE] Non-JSON message:', raw);
+          }
+          return;
+        }
+        
+        // BWE sends alerts in various formats, try to normalize
+        // Format 1: { symbol, price, changePercent, volume, etc }
+        // Format 2: { title, coins_included: [...], url, ... }
+        // Format 3: Array of alerts
+        
+        const alerts = Array.isArray(data) ? data : [data];
+        
+        for (const item of alerts) {
+          if (!item || typeof item !== 'object') continue;
+          
+          // Extract symbol from various possible fields
+          const symbol = item.symbol || 
+                        item.coin || 
+                        (Array.isArray(item.coins_included) && item.coins_included[0]) ||
+                        null;
+          
+          if (!symbol) continue;
+          
           pushVolatilityAlert({
             id: nanoid(),
-            symbol: data.symbol,
-            exchange: data.exchange || 'BWE',
-            price: data.price,
-            changePercent: data.changePercent || data.change_percent || data.change,
-            volume: data.volume,
-            type: data.type || 'VOLATILITY',
-            timestamp: data.timestamp || Date.now()
+            symbol: String(symbol).toUpperCase(),
+            exchange: item.exchange || 'BWE',
+            price: Number(item.price || item.last_price || 0),
+            changePercent: Number(item.changePercent || item.change_percent || item.change || item.percent_change || 0),
+            volume: Number(item.volume || item.volume_24h || 0),
+            type: item.type || item.alert_type || 'VOLATILITY',
+            timestamp: item.timestamp || Date.now()
           });
         }
       } catch (e) {
-        app.log.error(e, '[BWE] Failed to parse message');
+        app.log.error(e, '[BWE] Error processing message');
       }
     });
     
