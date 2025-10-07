@@ -38,6 +38,7 @@ let pgClient = null;
 // In-memory message store for development (when no database)
 let memoryMessages = [];
 let memoryNews = [];
+let memoryVolatilityAlerts = [];
 
 // File-based persistence for development
 const fs = require('fs');
@@ -148,6 +149,19 @@ async function initPostgres() {
       received_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS news_items_created_at ON news_items(created_at DESC);
+
+    -- Volatility Alerts storage
+    CREATE TABLE IF NOT EXISTS volatility_alerts (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      price NUMERIC,
+      change_percent NUMERIC,
+      volume NUMERIC,
+      alert_type TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS volatility_alerts_created_at ON volatility_alerts(created_at DESC);
   `);
 
   // Online migration: ensure client_id exists on chat_messages for persistence
@@ -316,6 +330,7 @@ app.get('/api/messages/:room', async (request, reply) => {
 
 const rooms = new Map(); // room -> Set(ws)
 const newsClients = new Set(); // connected ws clients for news
+const volatilityClients = new Set(); // connected ws clients for volatility alerts
 
 function broadcast(room, payload) {
   const set = rooms.get(room);
@@ -536,6 +551,50 @@ app.register(async function (fastify) {
     newsClients.add(ws);
     ws.on('close', () => { try { newsClients.delete(ws); } catch (_) {} });
   });
+
+  // Volatility Alerts WebSocket
+  fastify.get('/ws-volatility', { websocket: true }, async (connection, req) => {
+    const ws = connection.socket;
+    volatilityClients.add(ws);
+    
+    console.log('[Volatility] Client connected, sending last 10 alerts');
+    
+    // Send last 10 alerts on connection
+    try {
+      let alerts = [];
+      if (pgClient) {
+        const result = await pgClient.query(
+          `SELECT id, symbol, exchange, price, change_percent, volume, alert_type,
+                  EXTRACT(EPOCH FROM created_at) * 1000 as ts
+           FROM volatility_alerts
+           ORDER BY created_at DESC
+           LIMIT 10`
+        );
+        alerts = result.rows.reverse().map(row => ({
+          id: row.id,
+          symbol: row.symbol,
+          exchange: row.exchange,
+          price: Number(row.price),
+          changePercent: Number(row.change_percent),
+          volume: Number(row.volume),
+          type: row.alert_type,
+          timestamp: Number(row.ts)
+        }));
+      } else {
+        alerts = memoryVolatilityAlerts.slice(-10);
+      }
+      
+      // Send history
+      ws.send(JSON.stringify({ type: 'history', alerts }));
+    } catch (e) {
+      fastify.log.error(e, 'Failed to fetch volatility history');
+    }
+    
+    ws.on('close', () => { 
+      try { volatilityClients.delete(ws); } catch (_) {} 
+      console.log('[Volatility] Client disconnected');
+    });
+  });
 });
 
 // Ingestors for external news sources → store and broadcast
@@ -546,6 +605,75 @@ function broadcastNewsItem(item) {
       try { client.send(data); } catch (_) {}
     }
   } catch (_) {}
+}
+
+// Broadcast volatility alert to all connected clients
+function broadcastVolatilityAlert(alert) {
+  try {
+    const data = JSON.stringify({ type: 'alert', alert });
+    for (const client of volatilityClients) {
+      try { client.send(data); } catch (_) {}
+    }
+    console.log('[Volatility] Broadcasted alert:', alert.symbol, alert.changePercent + '%');
+  } catch (e) {
+    app.log.error(e, 'Failed to broadcast volatility alert');
+  }
+}
+
+// Store and broadcast volatility alert
+async function pushVolatilityAlert(alert) {
+  if (!alert || !alert.symbol) return;
+  
+  const alertData = {
+    id: alert.id || nanoid(),
+    symbol: String(alert.symbol).toUpperCase().slice(0, 20),
+    exchange: String(alert.exchange || 'UNKNOWN').toUpperCase().slice(0, 20),
+    price: Number(alert.price) || 0,
+    change_percent: Number(alert.changePercent) || 0,
+    volume: Number(alert.volume) || 0,
+    alert_type: String(alert.type || 'VOLATILITY').slice(0, 20),
+    timestamp: alert.timestamp || Date.now()
+  };
+  
+  // Store in memory
+  memoryVolatilityAlerts.push(alertData);
+  if (memoryVolatilityAlerts.length > 100) {
+    memoryVolatilityAlerts = memoryVolatilityAlerts.slice(-100);
+  }
+  
+  // Store in Postgres
+  if (pgClient) {
+    try {
+      await pgClient.query(
+        `INSERT INTO volatility_alerts (id, symbol, exchange, price, change_percent, volume, alert_type, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+        [
+          alertData.id,
+          alertData.symbol,
+          alertData.exchange,
+          alertData.price,
+          alertData.change_percent,
+          alertData.volume,
+          alertData.alert_type,
+          new Date(alertData.timestamp).toISOString()
+        ]
+      );
+    } catch (e) {
+      app.log.error(e, 'Failed to persist volatility alert');
+    }
+  }
+  
+  // Broadcast to connected clients
+  broadcastVolatilityAlert({
+    id: alertData.id,
+    symbol: alertData.symbol,
+    exchange: alertData.exchange,
+    price: alertData.price,
+    changePercent: alertData.change_percent,
+    volume: alertData.volume,
+    type: alertData.alert_type,
+    timestamp: alertData.timestamp
+  });
 }
 
 function normalizePhoenix(msg) {
@@ -635,6 +763,52 @@ function pushNews(item) {
   broadcastNewsItem(item);
 }
 
+// Connect to BWE for volatility alerts
+function connectBWE() {
+  try {
+    const ws = new WebSocket('ws://public.bwe-ws.com:8001/');
+    
+    ws.on('open', () => {
+      app.log.info('[BWE] Connected to volatility alerts');
+      console.log('[BWE] Connected successfully');
+    });
+    
+    ws.on('message', (buf) => {
+      try {
+        const data = JSON.parse(buf.toString());
+        
+        // BWE sends alerts in format: { symbol, price, changePercent, volume, etc }
+        if (data && data.symbol) {
+          pushVolatilityAlert({
+            id: nanoid(),
+            symbol: data.symbol,
+            exchange: data.exchange || 'BWE',
+            price: data.price,
+            changePercent: data.changePercent || data.change_percent || data.change,
+            volume: data.volume,
+            type: data.type || 'VOLATILITY',
+            timestamp: data.timestamp || Date.now()
+          });
+        }
+      } catch (e) {
+        app.log.error(e, '[BWE] Failed to parse message');
+      }
+    });
+    
+    ws.on('error', (e) => {
+      app.log.error(`[BWE] Error: ${e?.message || e}`);
+    });
+    
+    ws.on('close', () => {
+      app.log.warn('[BWE] Connection closed, reconnecting in 5s');
+      setTimeout(connectBWE, 5000);
+    });
+  } catch (e) {
+    app.log.error(e, '[BWE] Failed to connect');
+    setTimeout(connectBWE, 5000);
+  }
+}
+
 // External WS connections
 function connectExternalSources() {
   const sources = [
@@ -700,6 +874,8 @@ async function start() {
     app.log.info(`Chat server running on :${PORT} with CORS origins: ${JSON.stringify(getAllowedOrigins())}`);
     // Connect external news sources for aggregation
     connectExternalSources();
+    // Connect to BWE for volatility alerts
+    connectBWE();
   } catch (err) {
     app.log.error(err);
     process.exit(1);
