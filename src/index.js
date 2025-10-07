@@ -806,24 +806,37 @@ function connectBWE() {
           return;
         }
         
-        // BWE sends alerts in various formats, try to normalize
-        // Format 1: { symbol, price, changePercent, volume, etc }
-        // Format 2: { title, coins_included: [...], url, ... }
-        // Format 3: Array of alerts
+        // BWE sends alerts in format: 
+        // { title: "Price Monitor: COAIUSDT (COAI) -2.2% in the past 3 seconds", ... }
         
         const alerts = Array.isArray(data) ? data : [data];
         
         for (const item of alerts) {
           if (!item || typeof item !== 'object') continue;
           
-          // Extract symbol from various possible fields
-          const symbol = item.symbol || 
-                        item.coin || 
-                        (Array.isArray(item.coins_included) && item.coins_included[0]) ||
-                        null;
+          // Extract symbol from title (format: "Price Monitor: BTCUSDT (BTC) +5.2% in the past...")
+          let symbol = null;
+          let changePercent = 0;
+          
+          if (item.title) {
+            // Match pattern: SYMBOLUSDT (SYMBOL) ±X.X%
+            const match = item.title.match(/([A-Z0-9]+USDT)\s*\([A-Z0-9]+\)\s*([-+]?\d+\.?\d*)%/);
+            if (match) {
+              symbol = match[1]; // e.g., "BTCUSDT"
+              changePercent = parseFloat(match[2]); // e.g., -2.2
+            }
+          }
+          
+          // Fallback to other fields if available
+          if (!symbol) {
+            symbol = item.symbol || 
+                    item.coin || 
+                    (Array.isArray(item.coins_included) && item.coins_included[0]) ||
+                    null;
+          }
           
           if (!symbol) {
-            console.log('[BWE] Alert without symbol:', JSON.stringify(item).slice(0, 200));
+            console.log('[BWE] Could not extract symbol from:', JSON.stringify(item).slice(0, 200));
             continue;
           }
           
@@ -831,14 +844,14 @@ function connectBWE() {
             id: nanoid(),
             symbol: String(symbol).toUpperCase(),
             exchange: item.exchange || 'BWE',
-            price: Number(item.price || item.last_price || 0),
-            changePercent: Number(item.changePercent || item.change_percent || item.change || item.percent_change || 0),
+            price: Number(item.price || item.last_price || item.firstPrice?.price || 0),
+            changePercent: changePercent || Number(item.changePercent || item.change_percent || item.change || item.percent_change || 0),
             volume: Number(item.volume || item.volume_24h || 0),
             type: item.type || item.alert_type || 'VOLATILITY',
-            timestamp: item.timestamp || Date.now()
+            timestamp: item.time || item.timestamp || Date.now()
           };
           
-          console.log('[BWE] New alert:', alert.symbol, alert.changePercent + '%');
+          console.log('[BWE] New alert:', alert.symbol, (alert.changePercent > 0 ? '+' : '') + alert.changePercent + '%');
           pushVolatilityAlert(alert);
         }
       } catch (e) {
