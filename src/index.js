@@ -333,6 +333,102 @@ app.post('/api/trade-events', async (request, reply) => {
   }
 });
 
+// Get recent trade events
+app.get('/api/trade-events', async (request, reply) => {
+  try {
+    const limit = Math.min(Number(request.query.limit) || 100, 500);
+    const exchange = request.query.exchange ? String(request.query.exchange).toLowerCase() : null;
+    
+    if (!pgClient) {
+      return { orders: [], fills: [], events: [] };
+    }
+    
+    // Fetch recent orders
+    let ordersQuery = `
+      SELECT id, client_order_id, exchange, symbol, side, type, price, qty, status, 
+             EXTRACT(EPOCH FROM created_at) * 1000 as ts
+      FROM orders
+    `;
+    const ordersParams = [];
+    if (exchange) {
+      ordersQuery += ` WHERE exchange = $1`;
+      ordersParams.push(exchange);
+    }
+    ordersQuery += ` ORDER BY created_at DESC LIMIT $${ordersParams.length + 1}`;
+    ordersParams.push(limit);
+    
+    const ordersResult = await pgClient.query(ordersQuery, ordersParams);
+    const orders = ordersResult.rows.map(row => ({
+      id: row.id,
+      clientOrderId: row.client_order_id,
+      exchange: row.exchange,
+      symbol: row.symbol,
+      side: row.side,
+      type: row.type,
+      price: row.price ? Number(row.price) : null,
+      qty: row.qty ? Number(row.qty) : null,
+      status: row.status,
+      ts: Number(row.ts)
+    }));
+    
+    // Fetch recent fills
+    let fillsQuery = `
+      SELECT id, order_id, exchange, symbol, price, qty, fee, liquidity,
+             EXTRACT(EPOCH FROM ts) * 1000 as ts
+      FROM fills
+    `;
+    const fillsParams = [];
+    if (exchange) {
+      fillsQuery += ` WHERE exchange = $1`;
+      fillsParams.push(exchange);
+    }
+    fillsQuery += ` ORDER BY ts DESC LIMIT $${fillsParams.length + 1}`;
+    fillsParams.push(limit);
+    
+    const fillsResult = await pgClient.query(fillsQuery, fillsParams);
+    const fills = fillsResult.rows.map(row => ({
+      id: row.id,
+      orderId: row.order_id,
+      exchange: row.exchange,
+      symbol: row.symbol,
+      price: Number(row.price),
+      qty: Number(row.qty),
+      fee: row.fee ? Number(row.fee) : null,
+      liquidity: row.liquidity,
+      ts: Number(row.ts)
+    }));
+    
+    // Fetch recent events
+    let eventsQuery = `
+      SELECT id, order_id, exchange, type, payload,
+             EXTRACT(EPOCH FROM ts) * 1000 as ts
+      FROM order_events
+    `;
+    const eventsParams = [];
+    if (exchange) {
+      eventsQuery += ` WHERE exchange = $1`;
+      eventsParams.push(exchange);
+    }
+    eventsQuery += ` ORDER BY ts DESC LIMIT $${eventsParams.length + 1}`;
+    eventsParams.push(limit);
+    
+    const eventsResult = await pgClient.query(eventsQuery, eventsParams);
+    const events = eventsResult.rows.map(row => ({
+      id: row.id,
+      orderId: row.order_id,
+      exchange: row.exchange,
+      type: row.type,
+      payload: row.payload,
+      ts: Number(row.ts)
+    }));
+    
+    return { orders, fills, events };
+  } catch (e) {
+    app.log.error(e, 'Failed to fetch trade events');
+    return { orders: [], fills: [], events: [] };
+  }
+});
+
 // =====================
 // Stateless Forwarders
 // =====================
