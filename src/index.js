@@ -156,7 +156,27 @@ async function initPostgres() {
 
 const app = Fastify({ logger: true });
 
-app.register(fastifyCors, { origin: getAllowedOrigins(), credentials: true });
+// CORS configuration - pass function to be called on each request
+app.register(fastifyCors, { 
+  origin: (origin, callback) => {
+    const allowed = getAllowedOrigins();
+    console.log(`[CORS] Request from: ${origin}, Allowed: ${JSON.stringify(allowed)}`);
+    
+    // Allow requests with no origin (like curl, Postman, or same-origin)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    
+    // Check if origin is in allowed list
+    if (allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true 
+});
 app.register(fastifyWebsocket);
 
 // Minimal health and version endpoints
