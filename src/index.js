@@ -438,8 +438,12 @@ app.route({
   url: '/api/blofin/*',
   handler: async (req, reply) => {
     const suffix = req.params['*'] || '';
-    // Accept both '/api/blofin/<path>' and '/api/blofin/api/v1/...'
-    const normalized = String(suffix).replace(/^api\//, '');
+    // Accept both '/api/blofin/api/v1/...' (preferred) and '/api/blofin/v1/...'
+    // Ensure upstream path always begins with 'api/' (Blofin requires '/api/v1/...')
+    let normalized = String(suffix).replace(/^\/+/, '');
+    if (!normalized.startsWith('api/')) {
+      normalized = `api/${normalized}`;
+    }
     const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
     const upstream = buildUpstreamUrl('https://openapi.blofin.com/', normalized, search);
     return forwardRequest(upstream, req, reply, BLOFIN_ALLOWED_HEADERS);
