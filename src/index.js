@@ -767,19 +767,32 @@ function pushNews(item) {
 function connectBWE() {
   try {
     const ws = new WebSocket('ws://public.bwe-ws.com:8001/');
+    let pingInterval;
     
     ws.on('open', () => {
       app.log.info('[BWE] Connected to volatility alerts');
       console.log('[BWE] Connected successfully');
+      
+      // Send ping every 8 seconds to keep connection alive
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('ping');
+        }
+      }, 8000);
     });
     
     ws.on('message', (buf) => {
       try {
         const raw = buf.toString();
         
-        // Log first message to understand BWE format
+        // Handle pong responses (keepalive)
+        if (raw === 'pong') {
+          return;
+        }
+        
+        // Log first real message to understand BWE format
         if (!ws._firstMessageLogged) {
-          console.log('[BWE] First message received:', raw.slice(0, 500));
+          console.log('[BWE] First alert received:', raw.slice(0, 500));
           ws._firstMessageLogged = true;
         }
         
@@ -788,10 +801,8 @@ function connectBWE() {
         try {
           data = JSON.parse(raw);
         } catch (parseError) {
-          // BWE might send non-JSON messages (pings, etc)
-          if (raw.length < 100) {
-            console.log('[BWE] Non-JSON message:', raw);
-          }
+          // Log unexpected non-JSON messages
+          console.log('[BWE] Non-JSON alert:', raw.slice(0, 200));
           return;
         }
         
@@ -811,9 +822,12 @@ function connectBWE() {
                         (Array.isArray(item.coins_included) && item.coins_included[0]) ||
                         null;
           
-          if (!symbol) continue;
+          if (!symbol) {
+            console.log('[BWE] Alert without symbol:', JSON.stringify(item).slice(0, 200));
+            continue;
+          }
           
-          pushVolatilityAlert({
+          const alert = {
             id: nanoid(),
             symbol: String(symbol).toUpperCase(),
             exchange: item.exchange || 'BWE',
@@ -822,7 +836,10 @@ function connectBWE() {
             volume: Number(item.volume || item.volume_24h || 0),
             type: item.type || item.alert_type || 'VOLATILITY',
             timestamp: item.timestamp || Date.now()
-          });
+          };
+          
+          console.log('[BWE] New alert:', alert.symbol, alert.changePercent + '%');
+          pushVolatilityAlert(alert);
         }
       } catch (e) {
         app.log.error(e, '[BWE] Error processing message');
@@ -834,6 +851,7 @@ function connectBWE() {
     });
     
     ws.on('close', () => {
+      if (pingInterval) clearInterval(pingInterval);
       app.log.warn('[BWE] Connection closed, reconnecting in 5s');
       setTimeout(connectBWE, 5000);
     });
