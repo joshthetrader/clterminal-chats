@@ -162,6 +162,45 @@ async function initPostgres() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS volatility_alerts_created_at ON volatility_alerts(created_at DESC);
+
+    -- Trading: orders, fills, events (no secrets)
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      client_order_id TEXT,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT,
+      type TEXT,
+      price NUMERIC,
+      qty NUMERIC,
+      status TEXT,
+      client_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_orders_client ON orders(client_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS fills (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      price NUMERIC NOT NULL,
+      qty NUMERIC NOT NULL,
+      fee NUMERIC,
+      liquidity TEXT,
+      ts TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_fills_order ON fills(order_id, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS order_events (
+      id TEXT PRIMARY KEY,
+      order_id TEXT REFERENCES orders(id) ON DELETE CASCADE,
+      exchange TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload JSONB,
+      ts TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
 
   // Online migration: ensure client_id exists on chat_messages for persistence
@@ -214,6 +253,85 @@ app.delete('/api/messages/clear', async (request, reply) => {
   }
 });
 app.get('/version', async () => ({ name: 'crypto-legends-chat-server', version: '0.1.0' }));
+
+// Trade events endpoint (client-emit) - store minimal metadata, no secrets
+app.post('/api/trade-events', async (request, reply) => {
+  try {
+    const body = request.body || {};
+    const type = String(body.type || '').toUpperCase();
+    const exchange = String(body.exchange || '').toLowerCase();
+    const clientId = body.clientId ? String(body.clientId).slice(0, 64) : null;
+    if (!type || !exchange) return reply.code(400).send({ error: 'type and exchange required' });
+
+    // Normalize supported types: ORDER_NEW, ORDER_UPDATE, FILL, EVENT
+    if (type === 'ORDER_NEW' && body.order) {
+      const o = body.order;
+      const orderId = String(o.id || o.orderId || '').slice(0, 100);
+      if (!orderId) return reply.code(400).send({ error: 'order.id required' });
+      if (pgClient) {
+        await pgClient.query(
+          `INSERT INTO orders (id, client_order_id, exchange, symbol, side, type, price, qty, status, client_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`,
+          [
+            orderId,
+            o.clientOrderId || null,
+            exchange,
+            (o.symbol || o.instId || '').toUpperCase(),
+            o.side || null,
+            o.type || null,
+            o.price != null ? Number(o.price) : null,
+            o.qty != null ? Number(o.qty) : null,
+            o.status || null,
+            clientId
+          ]
+        );
+      }
+      return { ok: true };
+    }
+
+    if (type === 'FILL' && body.fill) {
+      const f = body.fill;
+      const fillId = String(f.id || f.tradeId || '').slice(0, 120);
+      const orderId = String(f.orderId || '').slice(0, 100);
+      if (!fillId || !orderId) return reply.code(400).send({ error: 'fill.id and fill.orderId required' });
+      if (pgClient) {
+        await pgClient.query(
+          `INSERT INTO fills (id, order_id, exchange, symbol, price, qty, fee, liquidity, ts)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TO_TIMESTAMP($9/1000.0))
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            fillId,
+            orderId,
+            exchange,
+            (f.symbol || '').toUpperCase(),
+            Number(f.price),
+            Number(f.qty),
+            f.fee != null ? Number(f.fee) : null,
+            f.liquidity || null,
+            Number(f.ts || Date.now())
+          ]
+        );
+      }
+      return { ok: true };
+    }
+
+    // Generic event capture
+    const eventId = String(body.id || nanoid()).slice(0, 120);
+    const orderId = body.orderId ? String(body.orderId).slice(0, 100) : null;
+    if (pgClient) {
+      await pgClient.query(
+        `INSERT INTO order_events (id, order_id, exchange, type, payload)
+         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
+        [eventId, orderId, exchange, type, JSON.stringify(body.payload || body)]
+      );
+    }
+    return { ok: true };
+  } catch (e) {
+    app.log.error(e, 'trade-events error');
+    return reply.code(500).send({ error: 'failed' });
+  }
+});
 
 // =====================
 // Stateless Forwarders
