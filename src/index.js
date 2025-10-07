@@ -392,8 +392,13 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     // Body handling
     let body = undefined;
     if (method !== 'GET' && method !== 'HEAD') {
-      // Cap body size by Fastify default or env (already parsed if content-type app/json)
-      body = req.raw;
+      // Fastify has already parsed the body if content-type is application/json
+      // We need to stringify it back for fetch()
+      if (req.body && typeof req.body === 'object') {
+        body = JSON.stringify(req.body);
+      } else if (req.body) {
+        body = String(req.body);
+      }
     }
 
     const res = await fetch(upstreamUrl, {
