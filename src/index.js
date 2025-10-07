@@ -430,7 +430,7 @@ app.get('/api/trade-events', async (request, reply) => {
 });
 
 // =====================
-// Stateless Forwarders
+// Stateless Forwarders (Optimized)
 // =====================
 const ALLOWED_UPSTREAMS = new Set([
   'openapi.blofin.com',
@@ -444,6 +444,41 @@ const BLOFIN_ALLOWED_HEADERS = new Set([
 const BITUNIX_ALLOWED_HEADERS = new Set([
   'api-key','sign','timestamp','nonce','content-type'
 ]);
+
+// HTTP Agent with connection pooling for faster requests
+const http = require('http');
+const https = require('https');
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000, // Keep connections alive for 30s
+  maxSockets: 100, // Allow up to 100 concurrent connections per host
+  maxFreeSockets: 10, // Keep 10 idle connections ready
+  timeout: 5000, // Socket timeout
+  scheduling: 'fifo', // First in, first out (better for latency)
+  // DNS caching (node 18+)
+  lookup: undefined // Use default DNS with OS-level caching
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 100,
+  maxFreeSockets: 10,
+  timeout: 5000,
+  scheduling: 'fifo'
+});
+
+// Warm up connections to frequently used hosts
+const warmupConnections = () => {
+  const hosts = ['https://openapi.blofin.com', 'https://fapi.bitunix.com'];
+  hosts.forEach(host => {
+    fetch(`${host}/`, { agent: httpsAgent }).catch(() => {}); // Ignore errors, just warm up
+  });
+};
+
+// Warm up after server starts
+setTimeout(warmupConnections, 1000);
 
 function pickHeaders(headers, allowSet) {
   const out = {};
@@ -461,6 +496,7 @@ function buildUpstreamUrl(base, suffix, search) {
 }
 
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
+  const startTime = Date.now();
   try {
     // Security: ensure host is allowed
     try {
@@ -481,7 +517,8 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     delete sanitized['referer'];
 
     const controller = new AbortController();
-    const timeoutMs = Number(process.env.UPSTREAM_TIMEOUT_MS || 10000);
+    // Reduced timeout for faster failure detection (trade execution speed)
+    const timeoutMs = Number(process.env.UPSTREAM_TIMEOUT_MS || 5000);
     const t = setTimeout(() => controller.abort(), timeoutMs);
     const method = (req.method || 'GET').toUpperCase();
 
@@ -497,15 +534,29 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
       }
     }
 
+    // Use connection pooling agent for faster requests
+    const parsedUrl = new URL(upstreamUrl);
+    const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
+
+    const fetchStart = Date.now();
     const res = await fetch(upstreamUrl, {
       method,
       headers: sanitized,
       body,
-      signal: controller.signal
+      signal: controller.signal,
+      agent // Connection pooling for reuse
     }).catch((e) => {
       throw e;
     });
     clearTimeout(t);
+    
+    const fetchTime = Date.now() - fetchStart;
+    const totalTime = Date.now() - startTime;
+    
+    // Log performance for trade endpoints (POST requests)
+    if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
+      console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+    }
 
     // Mirror status and content-type
     reply.code(res.status);
