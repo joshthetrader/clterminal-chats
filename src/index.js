@@ -215,6 +215,145 @@ app.delete('/api/messages/clear', async (request, reply) => {
 });
 app.get('/version', async () => ({ name: 'crypto-legends-chat-server', version: '0.1.0' }));
 
+// =====================
+// Stateless Forwarders
+// =====================
+const ALLOWED_UPSTREAMS = new Set([
+  'openapi.blofin.com',
+  'fapi.bitunix.com',
+  'api.bitunix.com'
+]);
+
+const BLOFIN_ALLOWED_HEADERS = new Set([
+  'access-key','access-sign','access-timestamp','access-passphrase','access-nonce','broker-id','content-type'
+]);
+const BITUNIX_ALLOWED_HEADERS = new Set([
+  'api-key','sign','timestamp','nonce','content-type'
+]);
+
+function pickHeaders(headers, allowSet) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const key = String(k).toLowerCase();
+    if (allowSet.has(key)) out[k] = v;
+  }
+  return out;
+}
+
+function buildUpstreamUrl(base, suffix, search) {
+  const path = String(suffix || '').replace(/^\//, '');
+  const qs = search ? String(search) : '';
+  return `${base}${path}${qs}`;
+}
+
+async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
+  try {
+    // Security: ensure host is allowed
+    try {
+      const u = new URL(upstreamUrl);
+      if (!ALLOWED_UPSTREAMS.has(u.hostname)) {
+        return reply.code(400).send({ error: 'Upstream not allowed' });
+      }
+    } catch (_) {
+      return reply.code(400).send({ error: 'Invalid upstream URL' });
+    }
+
+    // Build headers
+    const incoming = req.headers || {};
+    const sanitized = pickHeaders(incoming, allowedHeaderSet);
+    // Never forward cookies or origin headers
+    delete sanitized['cookie'];
+    delete sanitized['origin'];
+    delete sanitized['referer'];
+
+    const controller = new AbortController();
+    const timeoutMs = Number(process.env.UPSTREAM_TIMEOUT_MS || 10000);
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const method = (req.method || 'GET').toUpperCase();
+
+    // Body handling
+    let body = undefined;
+    if (method !== 'GET' && method !== 'HEAD') {
+      // Cap body size by Fastify default or env (already parsed if content-type app/json)
+      body = req.raw;
+    }
+
+    const res = await fetch(upstreamUrl, {
+      method,
+      headers: sanitized,
+      body,
+      signal: controller.signal
+    }).catch((e) => {
+      throw e;
+    });
+    clearTimeout(t);
+
+    // Mirror status and content-type
+    reply.code(res.status);
+    // Copy selected response headers
+    const resCt = res.headers.get('content-type');
+    if (resCt) reply.header('content-type', resCt);
+
+    // Stream back
+    const buf = Buffer.from(await res.arrayBuffer());
+    return reply.send(buf);
+  } catch (e) {
+    const code = e?.name === 'AbortError' ? 504 : 502;
+    return reply.code(code).send({ error: 'Upstream error' });
+  }
+}
+
+// Preflight helpers
+function setPreflightHeaders(reply, allowHeaders) {
+  reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  reply.header('Access-Control-Allow-Headers', allowHeaders);
+  reply.header('Access-Control-Max-Age', '600');
+}
+
+// Blofin forwarder
+app.options('/api/blofin/*', async (req, reply) => {
+  setPreflightHeaders(reply, 'Content-Type, ACCESS-KEY, ACCESS-SIGN, ACCESS-TIMESTAMP, ACCESS-PASSPHRASE, ACCESS-NONCE, BROKER-ID');
+  return reply.send();
+});
+app.all('/api/blofin/*', async (req, reply) => {
+  const suffix = req.params['*'] || '';
+  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+  const upstream = buildUpstreamUrl('https://openapi.blofin.com/', suffix, search);
+  return forwardRequest(upstream, req, reply, BLOFIN_ALLOWED_HEADERS);
+});
+
+// Bitunix forwarder (public)
+app.options('/api/bitunix/*', async (req, reply) => {
+  setPreflightHeaders(reply, 'Content-Type');
+  return reply.send();
+});
+app.all('/api/bitunix/*', async (req, reply) => {
+  const suffix = req.params['*'] || '';
+  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+  const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
+  return forwardRequest(upstream, req, reply, new Set(['content-type']));
+});
+
+// Bitunix forwarder (private)
+app.options('/api/bitunix-private/*', async (req, reply) => {
+  setPreflightHeaders(reply, 'Content-Type, api-key, sign, timestamp, nonce');
+  return reply.send();
+});
+app.all('/api/bitunix-private/*', async (req, reply) => {
+  const suffix = req.params['*'] || '';
+  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+  const upstream = buildUpstreamUrl('https://fapi.bitunix.com/', suffix, search);
+  return forwardRequest(upstream, req, reply, BITUNIX_ALLOWED_HEADERS);
+});
+
+// Bitunix alt host (api.bitunix.com)
+app.all('/api/bitunix-alt/*', async (req, reply) => {
+  const suffix = req.params['*'] || '';
+  const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+  const upstream = buildUpstreamUrl('https://api.bitunix.com/', suffix, search);
+  return forwardRequest(upstream, req, reply, new Set(['content-type']));
+});
+
 // News: fetch last N items
 app.get('/api/news', async (request, reply) => {
   const limit = Math.min(Number(request.query.limit) || 100, 200);
