@@ -674,6 +674,46 @@ app.route({
   }
 });
 
+// -------------------------
+// WebSocket forwarders
+// -------------------------
+
+function wsPipe(client, upstreamUrl) {
+  const upstream = new WebSocket(upstreamUrl, { rejectUnauthorized: true });
+  const closeBoth = (code = 1000, reason = 'closing') => {
+    try { upstream.close(code, reason); } catch(_) {}
+    try { client.close(code, reason); } catch(_) {}
+  };
+  upstream.on('open', () => {
+    client.on('message', (msg) => { try { upstream.send(msg); } catch(_) {} });
+    upstream.on('message', (msg) => { try { client.send(msg); } catch(_) {} });
+  });
+  upstream.on('error', () => closeBoth(1011, 'upstream error'));
+  client.on('error', () => closeBoth(1011, 'client error'));
+  upstream.on('close', () => closeBoth(1000, 'upstream closed'));
+  client.on('close', () => closeBoth(1000, 'client closed'));
+}
+
+// Blofin public WS → /ws-blofin-public
+app.get('/ws-blofin-public', { websocket: true }, (connection /* SocketStream */, req) => {
+  wsPipe(connection.socket, 'wss://openapi.blofin.com/ws/public');
+});
+
+// Blofin private WS → /ws-blofin-private
+app.get('/ws-blofin-private', { websocket: true }, (connection, req) => {
+  wsPipe(connection.socket, 'wss://openapi.blofin.com/ws/private');
+});
+
+// Bitunix public WS → /ws-bitunix-public
+app.get('/ws-bitunix-public', { websocket: true }, (connection, req) => {
+  wsPipe(connection.socket, 'wss://fapi.bitunix.com/public/');
+});
+
+// Bitunix private WS → /ws-bitunix-private
+app.get('/ws-bitunix-private', { websocket: true }, (connection, req) => {
+  wsPipe(connection.socket, 'wss://fapi.bitunix.com/private/');
+});
+
 // News: fetch last N items
 app.get('/api/news', async (request, reply) => {
   const limit = Math.min(Number(request.query.limit) || 100, 200);
@@ -681,7 +721,7 @@ app.get('/api/news', async (request, reply) => {
     if (pgClient) {
       // Prefer DB results if available
       const result = await pgClient.query(
-        `SELECT id, source_name, source_username, text, url, followers, images, is_retweet, is_quote, is_reply,
+        `SELECT id, source_name, source_username, text, url, followers, images, coin, symbols, is_retweet, is_quote, is_reply,
                 EXTRACT(EPOCH FROM created_at) * 1000 as created_ms,
                 EXTRACT(EPOCH FROM COALESCE(received_at, created_at)) * 1000 as received_ms
          FROM news_items
@@ -697,6 +737,8 @@ app.get('/api/news', async (request, reply) => {
         url: r.url,
         followers: Number(r.followers || 0),
         images: Array.isArray(r.images) ? r.images : (typeof r.images === 'string' ? JSON.parse(r.images) : []),
+        coin: r.coin || null,
+        symbols: Array.isArray(r.symbols) ? r.symbols : (typeof r.symbols === 'string' ? JSON.parse(r.symbols) : []),
         isRetweet: !!r.is_retweet,
         isQuote: !!r.is_quote,
         isReply: !!r.is_reply,
