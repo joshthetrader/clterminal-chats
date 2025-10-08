@@ -11,6 +11,9 @@ const { Client } = require('pg');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
+// Protect optional read endpoints (disabled by default)
+const ENABLE_TRADE_EVENTS_READ = String(process.env.ENABLE_TRADE_EVENTS_READ || 'false').toLowerCase() === 'true';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 // Allow multiple origins for CORS
 const getAllowedOrigins = () => {
@@ -336,6 +339,18 @@ app.post('/api/trade-events', async (request, reply) => {
 // Get recent trade events
 app.get('/api/trade-events', async (request, reply) => {
   try {
+    // Guard: disable by default unless explicitly enabled via env
+    if (!ENABLE_TRADE_EVENTS_READ) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    // Require admin token
+    const hdr = request.headers || {};
+    const bearer = typeof hdr['authorization'] === 'string' ? hdr['authorization'].replace(/^Bearer\s+/i, '') : '';
+    const token = hdr['x-admin-token'] || hdr['x-adminkey'] || bearer || '';
+    if (!ADMIN_TOKEN || String(token) !== String(ADMIN_TOKEN)) {
+      return reply.code(401).send({ error: 'unauthorized' });
+    }
+
     const limit = Math.min(Number(request.query.limit) || 100, 500);
     const exchange = request.query.exchange ? String(request.query.exchange).toLowerCase() : null;
     
