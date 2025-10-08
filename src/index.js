@@ -26,6 +26,14 @@ const getAllowedOrigins = () => {
   return [
     'http://127.0.0.1:3000',
     'http://localhost:3000',
+    'http://127.0.0.1:3001',
+    'http://localhost:3001',
+    'http://127.0.0.1:3002',
+    'http://localhost:3002',
+    'http://127.0.0.1:3003',
+    'http://localhost:3003',
+    'http://127.0.0.1:8080',
+    'http://localhost:8080',
     'https://cryptolegendsweb-production.up.railway.app',
     'https://cryptolegendsweb.vercel.app'
   ];
@@ -145,6 +153,8 @@ async function initPostgres() {
       url TEXT,
       followers BIGINT,
       images JSONB,
+      coin TEXT,
+      symbols JSONB,
       is_retweet BOOLEAN DEFAULT FALSE,
       is_quote BOOLEAN DEFAULT FALSE,
       is_reply BOOLEAN DEFAULT FALSE,
@@ -208,6 +218,9 @@ async function initPostgres() {
 
   // Online migration: ensure client_id exists on chat_messages for persistence
   await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS client_id TEXT`);
+  // Online migrations for news_items extras
+  await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS coin TEXT`);
+  await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS symbols JSONB`);
 }
 
 const app = Fastify({ logger: true });
@@ -1124,31 +1137,61 @@ async function pushVolatilityAlert(alert) {
 
 function normalizePhoenix(msg) {
   try {
+    // Helper to pick the first non-empty string among candidates
+    const pickFirst = (...vals) => {
+      for (const v of vals) {
+        if (v === undefined || v === null) continue;
+        const s = String(v).trim();
+        if (s) return s;
+      }
+      return '';
+    };
+
     // Accept both Twitter-style and News-style payloads
-    const text = msg?.text || msg?.body || msg?.title || '';
-    // Resolve author fields from multiple possible locations
-    const username = (
-      msg?.username ||
-      msg?.screen_name ||
-      msg?.user?.username ||
-      msg?.user?.screen_name ||
-      msg?.sourceName ||
-      ''
+    const text = pickFirst(msg?.text, msg?.body, msg?.title);
+
+    // Resolve author username/handle from multiple possible locations and formats
+    let username = pickFirst(
+      msg?.username,
+      msg?.screen_name,
+      msg?.screenName,
+      msg?.handle,
+      msg?.user?.username,
+      msg?.user?.screen_name,
+      msg?.user?.screenName,
+      msg?.author?.username,
+      msg?.author?.screen_name,
+      msg?.author_username,
+      msg?.account?.username,
+      msg?.source_username,
+      msg?.sourceUsername
     );
-    const name = (
-      msg?.name ||
-      msg?.user?.name ||
-      msg?.source ||
-      ''
+    if (username && username.startsWith('@')) username = username.slice(1);
+
+    // Resolve display name from various keys (source/name/author)
+    const name = pickFirst(
+      msg?.name,
+      msg?.displayName,
+      msg?.user?.name,
+      msg?.author?.name,
+      msg?.source_name,
+      msg?.sourceName,
+      msg?.source
     );
-    const icon = (
-      msg?.icon ||
-      msg?.user?.profile_image_url ||
-      msg?.user?.profile_image_url_https ||
-      null
-    );
-    const url = msg?.url || msg?.tweetUrl || msg?.link || null;
+
+    const icon = pickFirst(
+      msg?.icon,
+      msg?.user?.profile_image_url,
+      msg?.user?.profile_image_url_https
+    ) || null;
+
+    const url = pickFirst(msg?.url, msg?.tweetUrl, msg?.link) || null;
     const createdAt = msg?.createdAt || msg?.receivedAt || Date.now();
+
+    // Extract coin/symbols (Phoenix may provide either 'coin' or 'symbols')
+    const coin = pickFirst(msg?.coin, msg?.symbol, (Array.isArray(msg?.symbols) && msg.symbols[0]));
+    const symbols = Array.isArray(msg?.symbols) ? msg.symbols : (coin ? [coin] : []);
+
     const item = {
       id: msg?._id || msg?.noticeId || nanoid(),
       username,
@@ -1159,6 +1202,8 @@ function normalizePhoenix(msg) {
       followers: Number(msg?.followers || 0),
       icon,
       url,
+      coin: coin || null,
+      symbols,
       images: Array.isArray(msg?.images) ? msg.images : [],
       isRetweet: !!msg?.isRetweet,
       isQuote: !!msg?.isQuote,
@@ -1187,8 +1232,8 @@ function pushNews(item) {
       const createdAt = item.createdAt ? new Date(item.createdAt) : new Date();
       const receivedAt = item.receivedAt ? new Date(item.receivedAt) : createdAt;
       pgClient.query(
-        `INSERT INTO news_items (id, source_name, source_username, text, url, followers, images, is_retweet, is_quote, is_reply, created_at, received_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO news_items (id, source_name, source_username, text, url, followers, images, coin, symbols, is_retweet, is_quote, is_reply, created_at, received_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING`,
         [
           String(item.id),
           item.name || null,
@@ -1197,6 +1242,8 @@ function pushNews(item) {
           item.url || null,
           Number(item.followers || 0),
           images,
+          item.coin || null,
+          JSON.stringify(item.symbols || []),
           !!item.isRetweet,
           !!item.isQuote,
           !!item.isReply,
