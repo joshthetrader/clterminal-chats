@@ -679,44 +679,92 @@ app.route({
 // -------------------------
 
 function wsPipe(client, upstreamUrl) {
-  console.log(`[WS-Proxy] Connecting to upstream: ${upstreamUrl}`);
-  const upstream = new WebSocket(upstreamUrl, { rejectUnauthorized: true });
+  console.log(`[WS-Proxy] 🔌 Client connected, establishing upstream connection to: ${upstreamUrl}`);
+  
+  let upstreamConnected = false;
+  let clientClosed = false;
+  
+  const upstream = new WebSocket(upstreamUrl, { 
+    rejectUnauthorized: true,
+    handshakeTimeout: 10000
+  });
+  
   const closeBoth = (code = 1000, reason = 'closing') => {
-    try { upstream.close(code, reason); } catch(_) {}
-    try { client.close(code, reason); } catch(_) {}
+    console.log(`[WS-Proxy] 🔌 Closing connections: ${reason} (code: ${code})`);
+    try { 
+      if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+        upstream.close(code, reason); 
+      }
+    } catch(e) { 
+      console.error(`[WS-Proxy] Error closing upstream:`, e.message); 
+    }
+    try { 
+      if (!clientClosed && (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING)) {
+        client.close(code, reason); 
+      }
+    } catch(e) { 
+      console.error(`[WS-Proxy] Error closing client:`, e.message); 
+    }
   };
-  upstream.on('open', () => {
-    console.log(`[WS-Proxy] ✅ Connected to ${upstreamUrl}`);
-    client.on('message', (msg) => { 
-      try { 
+  
+  // Set up client message forwarding (register early)
+  client.on('message', (msg) => {
+    if (!upstreamConnected) {
+      console.log(`[WS-Proxy] ⚠️ Client sent message before upstream connected, buffering...`);
+      // Buffer or drop - for now we'll just log
+      return;
+    }
+    try { 
+      if (upstream.readyState === WebSocket.OPEN) {
         upstream.send(msg); 
-      } catch(e) { 
-        console.error(`[WS-Proxy] Error sending to upstream:`, e.message); 
-      } 
-    });
+        console.log(`[WS-Proxy] 📤 Forwarded client->upstream: ${msg.toString().substring(0, 100)}`);
+      }
+    } catch(e) { 
+      console.error(`[WS-Proxy] ❌ Error sending to upstream:`, e.message); 
+    } 
+  });
+  
+  // Set up upstream connection
+  upstream.on('open', () => {
+    upstreamConnected = true;
+    console.log(`[WS-Proxy] ✅ Upstream connected: ${upstreamUrl}`);
+    
+    // Now set up upstream message forwarding
     upstream.on('message', (msg) => { 
       try { 
-        client.send(msg); 
+        if (!clientClosed && client.readyState === WebSocket.OPEN) {
+          client.send(msg); 
+          console.log(`[WS-Proxy] 📥 Forwarded upstream->client: ${msg.toString().substring(0, 100)}`);
+        }
       } catch(e) { 
-        console.error(`[WS-Proxy] Error sending to client:`, e.message); 
+        console.error(`[WS-Proxy] ❌ Error sending to client:`, e.message); 
       } 
     });
   });
+  
   upstream.on('error', (err) => {
     console.error(`[WS-Proxy] ❌ Upstream error for ${upstreamUrl}:`, err.message || err);
+    if (!upstreamConnected) {
+      console.error(`[WS-Proxy] ❌ Failed to establish upstream connection`);
+    }
     closeBoth(1011, 'upstream error');
   });
+  
   client.on('error', (err) => {
     console.error(`[WS-Proxy] ❌ Client error:`, err.message || err);
     closeBoth(1011, 'client error');
   });
+  
   upstream.on('close', (code, reason) => {
-    console.log(`[WS-Proxy] Upstream closed for ${upstreamUrl} (${code}: ${reason})`);
-    closeBoth(1000, 'upstream closed');
+    console.log(`[WS-Proxy] 🔌 Upstream closed: ${upstreamUrl} (${code}: ${reason})`);
+    upstreamConnected = false;
+    closeBoth(code, 'upstream closed');
   });
+  
   client.on('close', (code, reason) => {
-    console.log(`[WS-Proxy] Client closed (${code}: ${reason})`);
-    closeBoth(1000, 'client closed');
+    console.log(`[WS-Proxy] 🔌 Client closed (${code}: ${reason})`);
+    clientClosed = true;
+    closeBoth(code, 'client closed');
   });
 }
 
