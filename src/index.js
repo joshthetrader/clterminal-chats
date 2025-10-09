@@ -226,7 +226,10 @@ async function initPostgres() {
 const app = Fastify({ logger: true });
 
 // CORS configuration - pass function to be called on each request
-app.register(fastifyCors, { 
+// Register WebSocket plugin BEFORE CORS to ensure proper upgrade handling
+app.register(fastifyWebsocket);
+
+app.register(fastifyCors, {
   origin: (origin, callback) => {
     const allowed = getAllowedOrigins();
     console.log(`[CORS] Request from: ${origin}, Allowed: ${JSON.stringify(allowed)}`);
@@ -246,7 +249,6 @@ app.register(fastifyCors, {
   },
   credentials: true 
 });
-app.register(fastifyWebsocket);
 
 // Minimal health and version endpoints
 app.get('/health', async () => ({ ok: true }));
@@ -739,10 +741,16 @@ function wsPipe(client, upstreamUrl) {
     
     // Now set up upstream message forwarding
     upstream.on('message', (msg) => { 
+      console.log(`[WS-Forwarder] 📬 Received from upstream: ${msg.toString().substring(0, 100)}`);
       try { 
-        if (!clientClosed && client.readyState === WebSocket.OPEN) {
+        const clientState = client.readyState === 1 ? 'OPEN' : client.readyState === 0 ? 'CONNECTING' : client.readyState === 2 ? 'CLOSING' : 'CLOSED';
+        console.log(`[WS-Forwarder] Client state: ${clientState} (${client.readyState}), clientClosed: ${clientClosed}`);
+        
+        if (!clientClosed && client.readyState === 1) {
           client.send(msg); 
-          console.log(`[WS-Forwarder] 📥 Forwarded upstream->client: ${msg.toString().substring(0, 100)}`);
+          console.log(`[WS-Forwarder] ✅ Forwarded upstream->client successfully`);
+        } else {
+          console.warn(`[WS-Forwarder] ⚠️ Skipped forwarding - client not ready`);
         }
       } catch(e) { 
         console.error(`[WS-Forwarder] ❌ Error sending to client:`, e.message); 
