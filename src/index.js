@@ -679,19 +679,45 @@ app.route({
 // -------------------------
 
 function wsPipe(client, upstreamUrl) {
+  console.log(`[WS-Proxy] Connecting to upstream: ${upstreamUrl}`);
   const upstream = new WebSocket(upstreamUrl, { rejectUnauthorized: true });
   const closeBoth = (code = 1000, reason = 'closing') => {
     try { upstream.close(code, reason); } catch(_) {}
     try { client.close(code, reason); } catch(_) {}
   };
   upstream.on('open', () => {
-    client.on('message', (msg) => { try { upstream.send(msg); } catch(_) {} });
-    upstream.on('message', (msg) => { try { client.send(msg); } catch(_) {} });
+    console.log(`[WS-Proxy] ✅ Connected to ${upstreamUrl}`);
+    client.on('message', (msg) => { 
+      try { 
+        upstream.send(msg); 
+      } catch(e) { 
+        console.error(`[WS-Proxy] Error sending to upstream:`, e.message); 
+      } 
+    });
+    upstream.on('message', (msg) => { 
+      try { 
+        client.send(msg); 
+      } catch(e) { 
+        console.error(`[WS-Proxy] Error sending to client:`, e.message); 
+      } 
+    });
   });
-  upstream.on('error', () => closeBoth(1011, 'upstream error'));
-  client.on('error', () => closeBoth(1011, 'client error'));
-  upstream.on('close', () => closeBoth(1000, 'upstream closed'));
-  client.on('close', () => closeBoth(1000, 'client closed'));
+  upstream.on('error', (err) => {
+    console.error(`[WS-Proxy] ❌ Upstream error for ${upstreamUrl}:`, err.message || err);
+    closeBoth(1011, 'upstream error');
+  });
+  client.on('error', (err) => {
+    console.error(`[WS-Proxy] ❌ Client error:`, err.message || err);
+    closeBoth(1011, 'client error');
+  });
+  upstream.on('close', (code, reason) => {
+    console.log(`[WS-Proxy] Upstream closed for ${upstreamUrl} (${code}: ${reason})`);
+    closeBoth(1000, 'upstream closed');
+  });
+  client.on('close', (code, reason) => {
+    console.log(`[WS-Proxy] Client closed (${code}: ${reason})`);
+    closeBoth(1000, 'client closed');
+  });
 }
 
 // Blofin public WS → /ws-blofin-public
