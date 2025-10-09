@@ -679,15 +679,23 @@ app.route({
 // -------------------------
 
 function wsPipe(client, upstreamUrl) {
-  console.log(`[WS-Proxy] 🔌 Client connected, establishing upstream connection to: ${upstreamUrl}`);
+  console.log(`[WS-Forwarder] 🔌 Client connected, establishing upstream connection to: ${upstreamUrl}`);
+  console.log(`[WS-Forwarder] 🔍 Client object type: ${typeof client}, has readyState: ${client.readyState !== undefined}, readyState: ${client.readyState}`);
+  
+  if (!client || typeof client.on !== 'function') {
+    console.error(`[WS-Forwarder] ❌ Invalid client object - missing 'on' method`);
+    return;
+  }
   
   let upstreamConnected = false;
   let clientClosed = false;
   
+  console.log(`[WS-Forwarder] 🔌 Creating upstream WebSocket to: ${upstreamUrl}`);
   const upstream = new WebSocket(upstreamUrl, { 
     rejectUnauthorized: true,
     handshakeTimeout: 10000
   });
+  console.log(`[WS-Forwarder] 🔌 Upstream WebSocket created, readyState: ${upstream.readyState}`);
   
   const closeBoth = (code = 1000, reason = 'closing') => {
     console.log(`[WS-Proxy] 🔌 Closing connections: ${reason} (code: ${code})`);
@@ -727,42 +735,42 @@ function wsPipe(client, upstreamUrl) {
   // Set up upstream connection
   upstream.on('open', () => {
     upstreamConnected = true;
-    console.log(`[WS-Proxy] ✅ Upstream connected: ${upstreamUrl}`);
+    console.log(`[WS-Forwarder] ✅ Upstream connected: ${upstreamUrl}`);
     
     // Now set up upstream message forwarding
     upstream.on('message', (msg) => { 
       try { 
         if (!clientClosed && client.readyState === WebSocket.OPEN) {
           client.send(msg); 
-          console.log(`[WS-Proxy] 📥 Forwarded upstream->client: ${msg.toString().substring(0, 100)}`);
+          console.log(`[WS-Forwarder] 📥 Forwarded upstream->client: ${msg.toString().substring(0, 100)}`);
         }
       } catch(e) { 
-        console.error(`[WS-Proxy] ❌ Error sending to client:`, e.message); 
+        console.error(`[WS-Forwarder] ❌ Error sending to client:`, e.message); 
       } 
     });
   });
   
   upstream.on('error', (err) => {
-    console.error(`[WS-Proxy] ❌ Upstream error for ${upstreamUrl}:`, err.message || err);
+    console.error(`[WS-Forwarder] ❌ Upstream error for ${upstreamUrl}:`, err.message || err);
     if (!upstreamConnected) {
-      console.error(`[WS-Proxy] ❌ Failed to establish upstream connection`);
+      console.error(`[WS-Forwarder] ❌ Failed to establish upstream connection`);
     }
     closeBoth(1011, 'upstream error');
   });
   
   client.on('error', (err) => {
-    console.error(`[WS-Proxy] ❌ Client error:`, err.message || err);
+    console.error(`[WS-Forwarder] ❌ Client error:`, err.message || err);
     closeBoth(1011, 'client error');
   });
   
   upstream.on('close', (code, reason) => {
-    console.log(`[WS-Proxy] 🔌 Upstream closed: ${upstreamUrl} (${code}: ${reason})`);
+    console.log(`[WS-Forwarder] 🔌 Upstream closed: ${upstreamUrl} (${code}: ${reason})`);
     upstreamConnected = false;
     closeBoth(code, 'upstream closed');
   });
   
   client.on('close', (code, reason) => {
-    console.log(`[WS-Proxy] 🔌 Client closed (${code}: ${reason})`);
+    console.log(`[WS-Forwarder] 🔌 Client closed (${code}: ${reason})`);
     clientClosed = true;
     closeBoth(code, 'client closed');
   });
