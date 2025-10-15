@@ -35,7 +35,8 @@ const getAllowedOrigins = () => {
     'http://127.0.0.1:8080',
     'http://localhost:8080',
     'https://cryptolegendsweb-production.up.railway.app',
-    'https://cryptolegendsweb.vercel.app'
+    'https://cryptolegendsweb.vercel.app',
+    'https://www.cryptolegendsterminal.com'
   ];
 };
 
