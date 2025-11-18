@@ -1,0 +1,25 @@
+{
+  "name": "crypto-legends-chat-server",
+  "version": "0.1.2",
+  "description": "Real-time chat and trade-share backend for Crypto Legends Terminal",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "NODE_ENV=development node src/index.js",
+    "build": "echo 'No build step required'"
+  },
+  "dependencies": {
+    "@fastify/cors": "^8.5.0",
+    "@fastify/websocket": "^8.3.1",
+    "fastify": "^4.28.1",
+    "nanoid": "^3.3.7",
+    "pg": "^8.13.1",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+
+

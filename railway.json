@@ -1,0 +1,13 @@
+{
+  "build": {
+    "builder": "NIXPACKS",
+    "nixpacksPlan": {
+      "phases": {
+        "install": { "cmds": ["npm ci"], "dependsOn": ["setup"] },
+        "start": { "cmds": ["npm run start"], "dependsOn": ["install"] }
+      }
+    }
+  }
+}
+
+

@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ['nodejs_22']
+
+[phases.install]
+cmds = ['npm ci --production=false']
+
+[phases.build]
+cmds = ['echo "No build step required"']
+
+[start]
+cmd = 'node src/index.js'
