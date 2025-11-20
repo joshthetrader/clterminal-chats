@@ -1,5 +1,8 @@
 // API Forwarder routes for proxying external APIs
 
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
 const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 
@@ -182,32 +185,86 @@ module.exports = function(app) {
 
   // Image proxy to avoid browser social-tracking blocks (e.g. Twitter avatars)
   app.get('/img-proxy', async (req, reply) => {
-    try {
-      const url = req.query.url;
-      if (!url) {
-        return reply.status(400).send('Missing url parameter');
-      }
+    const url = req.query.url;
+    if (!url) {
+      return reply.status(400).send('Missing url parameter');
+    }
 
+    try {
       const target = new URL(url);
-      const allowedHosts = new Set([
+      
+      // Allowlist common image hosts
+      const allowedHosts = [
         'pbs.twimg.com',
         'abs.twimg.com',
-        'polymarket-upload.s3.us-east-2.amazonaws.com'
-      ]);
+        'polymarket-upload.s3.us-east-2.amazonaws.com',
+        'pbs-pbs-twimg.cdn.twitter.com',
+        'ton.twitter.com'
+      ];
 
-      if (!allowedHosts.has(target.hostname)) {
+      // Check against exact match or wildcard patterns
+      const hostname = target.hostname;
+      const isAllowed = allowedHosts.some(h => 
+        hostname === h || 
+        (h.endsWith('.com') && hostname.endsWith('.com')) ||
+        hostname.includes('s3') && hostname.includes('amazonaws.com') ||
+        hostname.includes('cloudfront.net')
+      );
+
+      if (!isAllowed) {
+        console.warn(`[IMG-PROXY] Blocked: ${hostname}`);
         return reply.status(403).send('Host not allowed');
       }
 
-      const res = await fetch(target.toString());
-      const buf = Buffer.from(await res.arrayBuffer());
-      const contentType = res.headers.get('content-type') || 'image/jpeg';
+      // Use native http/https module for more reliability
+      return new Promise((resolve, reject) => {
+        const protocol = target.protocol === 'https:' ? https : http;
+        const options = {
+          hostname: target.hostname,
+          port: target.port,
+          path: target.pathname + target.search,
+          method: 'GET',
+          timeout: 8000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://twitter.com/'
+          }
+        };
 
-      reply.header('Content-Type', contentType);
-      reply.header('Cache-Control', 'public, max-age=300');
-      return reply.send(buf);
+        const req2 = protocol.request(options, (res2) => {
+          const chunks = [];
+          
+          res2.on('data', (chunk) => chunks.push(chunk));
+          
+          res2.on('end', () => {
+            try {
+              const buf = Buffer.concat(chunks);
+              const contentType = res2.headers['content-type'] || 'image/jpeg';
+              
+              reply.header('Content-Type', contentType);
+              reply.header('Cache-Control', 'public, max-age=3600');
+              reply.header('Access-Control-Allow-Origin', '*');
+              reply.send(buf);
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+
+        req2.on('timeout', () => {
+          req2.destroy();
+          reject(new Error('Request timeout'));
+        });
+
+        req2.on('error', (err) => {
+          reject(err);
+        });
+
+        req2.end();
+      });
     } catch (err) {
-      app.log.error(err);
+      console.error(`[IMG-PROXY] Error for ${url}:`, err.message);
       return reply.status(500).send('Image proxy error');
     }
   });
