@@ -69,6 +69,12 @@ async function start() {
     // Start external services
     news.connectExternalSources(storage.pgClient, storage.memoryNews);
     news.connectBWE(storage.pgClient, storage.memoryVolatilityAlerts);
+
+    // Handle graceful shutdown
+    process.on('SIGTERM', () => {
+      console.log('SIGTERM received, shutting down...');
+      process.exit(0);
+    });
     
   } catch (err) {
     app.log.error(err);

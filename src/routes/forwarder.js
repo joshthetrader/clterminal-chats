@@ -179,5 +179,37 @@ module.exports = function(app) {
       return forwardRequest(upstream, req, reply, new Set(['content-type']));
     }
   });
+
+  // Image proxy to avoid browser social-tracking blocks (e.g. Twitter avatars)
+  app.get('/img-proxy', async (req, reply) => {
+    try {
+      const url = req.query.url;
+      if (!url) {
+        return reply.status(400).send('Missing url parameter');
+      }
+
+      const target = new URL(url);
+      const allowedHosts = new Set([
+        'pbs.twimg.com',
+        'abs.twimg.com',
+        'polymarket-upload.s3.us-east-2.amazonaws.com'
+      ]);
+
+      if (!allowedHosts.has(target.hostname)) {
+        return reply.status(403).send('Host not allowed');
+      }
+
+      const res = await fetch(target.toString());
+      const buf = Buffer.from(await res.arrayBuffer());
+      const contentType = res.headers.get('content-type') || 'image/jpeg';
+
+      reply.header('Content-Type', contentType);
+      reply.header('Cache-Control', 'public, max-age=300');
+      return reply.send(buf);
+    } catch (err) {
+      app.log.error(err);
+      return reply.status(500).send('Image proxy error');
+    }
+  });
 };
 
