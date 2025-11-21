@@ -79,9 +79,6 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const origin = req.headers.origin || '*';
     reply.header('Access-Control-Allow-Origin', origin);
     reply.header('Access-Control-Allow-Credentials', 'true');
-    
-    // Phase 3: Enable compression for all responses
-    reply.header('Content-Encoding', 'gzip');
 
     const buf = Buffer.from(await res.arrayBuffer());
     return reply.send(buf);
