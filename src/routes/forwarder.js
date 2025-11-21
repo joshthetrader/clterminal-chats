@@ -6,6 +6,10 @@ const { URL } = require('url');
 const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 
+const TICKER_CACHE_TTL = 30000; // 30s shared cache
+const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
+const pendingTickerFetches = new Map(); // cacheKey -> Promise
+
 function setPreflightHeaders(reply, allowHeaders, origin) {
   reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   reply.header('Access-Control-Allow-Headers', allowHeaders);
@@ -13,6 +17,15 @@ function setPreflightHeaders(reply, allowHeaders, origin) {
   reply.header('Access-Control-Allow-Credentials', 'true');
   reply.header('Access-Control-Max-Age', '600');
 }
+
+const isTickerEndpoint = (parsedUrl) => {
+  const hostname = parsedUrl.hostname;
+  const pathname = parsedUrl.pathname.toLowerCase();
+
+  if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
+  if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
+  return false;
+};
 
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
   const startTime = Date.now();
@@ -53,35 +66,82 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const parsedUrl = new URL(upstreamUrl);
     const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
 
-    const fetchStart = Date.now();
-    const res = await fetch(upstreamUrl, {
-      method,
-      headers: sanitized,
-      body,
-      signal: controller.signal,
-      agent
-    }).catch((e) => {
-      throw e;
-    });
-    clearTimeout(t);
-    
-    const fetchTime = Date.now() - fetchStart;
-    const totalTime = Date.now() - startTime;
-    
-    if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
-      console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+    const cacheable = method === 'GET' && isTickerEndpoint(parsedUrl);
+    const cacheKey = cacheable ? parsedUrl.toString() : null;
+    const origin = req.headers.origin || '*';
+
+    const performRequest = async () => {
+      const fetchStart = Date.now();
+      const res = await fetch(upstreamUrl, {
+        method,
+        headers: sanitized,
+        body,
+        signal: controller.signal,
+        agent
+      }).catch((e) => {
+        throw e;
+      });
+      clearTimeout(t);
+      
+      const fetchTime = Date.now() - fetchStart;
+      const totalTime = Date.now() - startTime;
+      
+      if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
+        console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+      }
+
+      const bodyBuf = Buffer.from(await res.arrayBuffer());
+      return {
+        status: res.status,
+        ok: res.ok,
+        contentType: res.headers.get('content-type'),
+        body: bodyBuf
+      };
+    };
+
+    const sendResult = (result, cacheHeader) => {
+      reply.code(result.status);
+      if (result.contentType) reply.header('content-type', result.contentType);
+      reply.header('Access-Control-Allow-Origin', origin);
+      reply.header('Access-Control-Allow-Credentials', 'true');
+      if (cacheHeader) reply.header('X-Ticker-Cache', cacheHeader);
+      return reply.send(Buffer.from(result.body));
+    };
+
+    if (cacheable && cacheKey) {
+      const cached = tickerCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < TICKER_CACHE_TTL) {
+        return sendResult(cached, 'HIT');
+      }
+
+      if (pendingTickerFetches.has(cacheKey)) {
+        const pendingResult = await pendingTickerFetches.get(cacheKey);
+        if (pendingResult) {
+          return sendResult(pendingResult, 'HIT');
+        }
+      }
+
+      const execPromise = performRequest().then(result => {
+        if (result.ok) {
+          tickerCache.set(cacheKey, {
+            status: result.status,
+            contentType: result.contentType,
+            body: Buffer.from(result.body),
+            ts: Date.now()
+          });
+        }
+        return result;
+      }).finally(() => {
+        pendingTickerFetches.delete(cacheKey);
+      });
+      pendingTickerFetches.set(cacheKey, execPromise);
+
+      const freshResult = await execPromise;
+      return sendResult(freshResult, freshResult.ok ? 'MISS' : 'BYPASS');
     }
 
-    reply.code(res.status);
-    const resCt = res.headers.get('content-type');
-    if (resCt) reply.header('content-type', resCt);
-    
-    const origin = req.headers.origin || '*';
-    reply.header('Access-Control-Allow-Origin', origin);
-    reply.header('Access-Control-Allow-Credentials', 'true');
-
-    const buf = Buffer.from(await res.arrayBuffer());
-    return reply.send(buf);
+    const result = await performRequest();
+    return sendResult(result, null);
   } catch (e) {
     const code = e?.name === 'AbortError' ? 504 : 502;
     console.error(`[FORWARDER] ${method} ${upstreamUrl} failed:`, e?.message || e);
