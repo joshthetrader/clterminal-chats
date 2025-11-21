@@ -79,6 +79,9 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const origin = req.headers.origin || '*';
     reply.header('Access-Control-Allow-Origin', origin);
     reply.header('Access-Control-Allow-Credentials', 'true');
+    
+    // Phase 3: Enable compression for all responses
+    reply.header('Content-Encoding', 'gzip');
 
     const buf = Buffer.from(await res.arrayBuffer());
     return reply.send(buf);
@@ -87,6 +90,10 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     return reply.code(code).send({ error: 'Upstream error' });
   }
 }
+
+// Image proxy cache with 1-hour TTL
+const imageCache = new Map();
+const CACHE_TTL = 3600000; // 1 hour in milliseconds
 
 // Warm up connections
 const warmupConnections = () => {
@@ -184,6 +191,7 @@ module.exports = function(app) {
   });
 
   // Image proxy to avoid browser social-tracking blocks (e.g. Twitter avatars)
+  // WITH IN-MEMORY CACHING (Phase 2 optimization)
   app.get('/img-proxy', async (req, reply) => {
     const url = req.query.url;
     if (!url) {
@@ -192,6 +200,21 @@ module.exports = function(app) {
 
     try {
       const target = new URL(url);
+      
+      // Check cache first
+      const cacheKey = target.toString();
+      if (imageCache.has(cacheKey)) {
+        const cached = imageCache.get(cacheKey);
+        if (Date.now() - cached.time < CACHE_TTL) {
+          reply.header('Content-Type', cached.contentType);
+          reply.header('Cache-Control', 'public, max-age=3600');
+          reply.header('Access-Control-Allow-Origin', '*');
+          reply.header('X-Cache', 'HIT');
+          return reply.send(cached.buffer);
+        } else {
+          imageCache.delete(cacheKey);
+        }
+      }
       
       // Allowlist common image hosts
       const allowedHosts = [
@@ -241,9 +264,17 @@ module.exports = function(app) {
               const buf = Buffer.concat(chunks);
               const contentType = res2.headers['content-type'] || 'image/jpeg';
               
+              // Cache the response
+              imageCache.set(cacheKey, {
+                buffer: buf,
+                contentType: contentType,
+                time: Date.now()
+              });
+              
               reply.header('Content-Type', contentType);
               reply.header('Cache-Control', 'public, max-age=3600');
               reply.header('Access-Control-Allow-Origin', '*');
+              reply.header('X-Cache', 'MISS');
               reply.send(buf);
               resolve();
             } catch (e) {

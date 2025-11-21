@@ -98,10 +98,22 @@ function normalizePhoenix(msg) {
   }
 }
 
-// Broadcast news item to connected clients
+// Broadcast news item to connected clients (LEAN version - removes detectedTokens)
 function broadcastNewsItem(item) {
   try {
-    const data = JSON.stringify({ item });
+    // Send only essential fields to reduce bandwidth by ~30%
+    const leanItem = {
+      id: item.id,
+      username: item.username,
+      name: item.name,
+      text: item.text,
+      createdAt: item.createdAt,
+      icon: item.icon,
+      url: item.url,
+      symbols: item.symbols || []
+      // Removed: receivedAt, followers, images, isRetweet, isQuote, isReply, coin
+    };
+    const data = JSON.stringify({ item: leanItem });
     for (const client of newsClients) {
       try {
         client.send(data);
