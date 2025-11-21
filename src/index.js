@@ -5,6 +5,7 @@
 
 const Fastify = require('fastify');
 const fastifyCors = require('@fastify/cors');
+const fastifyCompress = require('@fastify/compress');
 const fastifyWebsocket = require('@fastify/websocket');
 const { nanoid } = require('nanoid');
 
@@ -36,6 +37,13 @@ app.register(fastifyCors, {
     }
   },
   credentials: true 
+});
+
+// Response compression (br/gzip/deflate) with 1KB threshold
+app.register(fastifyCompress, {
+  global: true,
+  encodings: ['br', 'gzip', 'deflate'],
+  threshold: 1024
 });
 
 // Healthcheck endpoints
