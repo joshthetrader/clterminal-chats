@@ -141,47 +141,96 @@ module.exports = function(app) {
     // News WebSocket
     fastify.get('/ws-news', { websocket: true }, (connection, req) => {
       const ws = connection.socket;
-      newsClients.add(ws);
-      ws.on('close', () => { try { newsClients.delete(ws); } catch (_) {} });
+      let subscribed = false;
+      const timeout = setTimeout(() => {
+        if (!subscribed) {
+          try { ws.close(4400, 'subscribe required'); } catch (_) {}
+        }
+      }, 5000);
+
+      ws.on('message', (raw) => {
+        if (subscribed) return;
+        try {
+          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          if (data?.type === 'subscribe' && data?.feed === 'news') {
+            subscribed = true;
+            clearTimeout(timeout);
+            newsClients.add(ws);
+            return;
+          }
+        } catch (_) {}
+        try { ws.close(4401, 'invalid subscribe'); } catch (_) {}
+      });
+
+      ws.on('close', () => {
+        clearTimeout(timeout);
+        if (subscribed) {
+          try { newsClients.delete(ws); } catch (_) {}
+        }
+      });
     });
 
     // Volatility Alerts WebSocket
     fastify.get('/ws-volatility', { websocket: true }, async (connection, req) => {
       const ws = connection.socket;
-      volatilityClients.add(ws);
-      
-      console.log('[Volatility] Client connected, sending last 10 alerts');
-      
-      try {
-        let alerts = [];
-        if (storage.pgClient) {
-          const result = await storage.pgClient.query(
-            `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, EXTRACT(EPOCH FROM created_at) * 1000 as ts
-             FROM volatility_alerts
-             ORDER BY created_at DESC
-             LIMIT 10`
-          );
-          alerts = result.rows.reverse().map(row => ({
-            id: row.id,
-            symbol: row.symbol,
-            exchange: row.exchange,
-            price: Number(row.price),
-            changePercent: Number(row.change_percent),
-            volume: Number(row.volume),
-            type: row.alert_type,
-            timestamp: Number(row.ts)
-          }));
-        } else {
-          alerts = storage.memoryVolatilityAlerts.slice(-10);
+      let subscribed = false;
+      const subscribeTimeout = setTimeout(() => {
+        if (!subscribed) {
+          try { ws.close(4400, 'subscribe required'); } catch (_) {}
         }
-        
-        ws.send(JSON.stringify({ type: 'history', alerts }));
-      } catch (e) {
-        fastify.log.error(e, 'Failed to fetch volatility history');
-      }
+      }, 5000);
+
+      const sendHistory = async () => {
+        console.log('[Volatility] Client connected, sending last 10 alerts');
+        try {
+          let alerts = [];
+          if (storage.pgClient) {
+            const result = await storage.pgClient.query(
+              `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, EXTRACT(EPOCH FROM created_at) * 1000 as ts
+               FROM volatility_alerts
+               ORDER BY created_at DESC
+               LIMIT 10`
+            );
+            alerts = result.rows.reverse().map(row => ({
+              id: row.id,
+              symbol: row.symbol,
+              exchange: row.exchange,
+              price: Number(row.price),
+              changePercent: Number(row.change_percent),
+              volume: Number(row.volume),
+              type: row.alert_type,
+              timestamp: Number(row.ts)
+            }));
+          } else {
+            alerts = storage.memoryVolatilityAlerts.slice(-10);
+          }
+          
+          ws.send(JSON.stringify({ type: 'history', alerts }));
+        } catch (e) {
+          fastify.log.error(e, 'Failed to fetch volatility history');
+        }
+      };
+
+      ws.on('message', async (raw) => {
+        if (subscribed) return;
+        try {
+          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          if (data?.type === 'subscribe' && data?.feed === 'volatility') {
+            subscribed = true;
+            clearTimeout(subscribeTimeout);
+            volatilityClients.add(ws);
+            await sendHistory();
+            return;
+          }
+        } catch (_) {}
+        try { ws.close(4401, 'invalid subscribe'); } catch (_) {}
+      });
       
       ws.on('close', () => { 
-        try { volatilityClients.delete(ws); } catch (_) {} 
+        clearTimeout(subscribeTimeout);
+        if (subscribed) {
+          try { volatilityClients.delete(ws); } catch (_) {}
+        }
         console.log('[Volatility] Client disconnected');
       });
     });

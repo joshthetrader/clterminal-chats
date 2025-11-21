@@ -108,18 +108,17 @@ function broadcastNewsItem(item) {
       name: item.name,
       text: item.text,
       createdAt: item.createdAt,
-      icon: item.icon,
       url: item.url,
       symbols: item.symbols || []
-      // Removed: receivedAt, followers, images, isRetweet, isQuote, isReply, coin
+      // Removed: receivedAt, followers, images, isRetweet, isQuote, isReply, coin, icon
     };
     const data = JSON.stringify({ item: leanItem });
     for (const client of newsClients) {
       try {
         client.send(data);
-      } catch (_) {}
+      } catch (_) { }
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // Broadcast volatility alert
@@ -129,7 +128,7 @@ function broadcastVolatilityAlert(alert) {
     for (const client of volatilityClients) {
       try {
         client.send(data);
-      } catch (_) {}
+      } catch (_) { }
     }
     console.log('[Volatility] Broadcasted alert:', alert.symbol, alert.changePercent + '%');
   } catch (e) {
@@ -140,13 +139,13 @@ function broadcastVolatilityAlert(alert) {
 // Push news item and broadcast
 function pushNews(item, pgClient, memoryNews) {
   if (!item || !item.text) return;
-  
+
   try {
     const idStr = String(item.id);
     const exists = memoryNews.some(m => String(m.id) === idStr);
     if (exists) return;
-  } catch (_) {}
-  
+  } catch (_) { }
+
   memoryNews.push(item);
   if (memoryNews.length > 1000) memoryNews.slice(-1000);
 
@@ -181,7 +180,7 @@ function pushNews(item, pgClient, memoryNews) {
       if (app) app.log.error(e, 'news_items persist error');
     }
   }
-  
+
   broadcastNewsItem(item);
 }
 
@@ -202,7 +201,7 @@ function connectExternalSources(pgClient, memoryNews) {
       ws.on('open', () => {
         if (app) app.log.info(`${source.name} connected`);
       });
-      
+
       ws.on('message', (buf) => {
         const dataStr = buf.toString();
         try {
@@ -217,13 +216,13 @@ function connectExternalSources(pgClient, memoryNews) {
             });
           }
           candidates.forEach((n) => pushNews(n, pgClient, memoryNews));
-        } catch (_) {}
+        } catch (_) { }
       });
-      
+
       ws.on('error', (e) => {
         if (app) app.log.error(`${source.name} error: ${e?.message || e}`);
       });
-      
+
       ws.on('close', () => {
         if (app) app.log.warn(`${source.name} closed, reconnecting soon`);
         endpointIndex.set(source.name, (idx + 1) % Math.max(1, urls.length));
@@ -243,28 +242,28 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
   try {
     const ws = new WebSocket(BWE_URL);
     let pingInterval;
-    
+
     ws.on('open', () => {
       if (app) app.log.info('[BWE] Connected to volatility alerts');
       console.log('[BWE] Connected successfully');
-      
+
       pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send('ping');
         }
       }, BWE_PING_INTERVAL);
     });
-    
+
     ws.on('message', (buf) => {
       try {
         const raw = buf.toString();
         if (raw === 'pong') return;
-        
+
         if (!ws._firstMessageLogged) {
           console.log('[BWE] First alert received:', raw.slice(0, 500));
           ws._firstMessageLogged = true;
         }
-        
+
         let data;
         try {
           data = JSON.parse(raw);
@@ -272,15 +271,15 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
           console.log('[BWE] Non-JSON alert:', raw.slice(0, 200));
           return;
         }
-        
+
         const alerts = Array.isArray(data) ? data : [data];
-        
+
         for (const item of alerts) {
           if (!item || typeof item !== 'object') continue;
-          
+
           let symbol = null;
           let changePercent = 0;
-          
+
           if (item.title) {
             const match = item.title.match(/([A-Z0-9]+USDT)\s*\([A-Z0-9]+\)\s*([-+]?\d+\.?\d*)%/);
             if (match) {
@@ -288,16 +287,16 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
               changePercent = parseFloat(match[2]);
             }
           }
-          
+
           if (!symbol) {
             symbol = item.symbol || item.coin || (Array.isArray(item.coins_included) && item.coins_included[0]) || null;
           }
-          
+
           if (!symbol) {
             console.log('[BWE] Could not extract symbol from:', JSON.stringify(item).slice(0, 200));
             continue;
           }
-          
+
           const alert = {
             id: nanoid(),
             symbol: String(symbol).toUpperCase(),
@@ -308,7 +307,7 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
             type: item.type || item.alert_type || 'VOLATILITY',
             timestamp: item.time || item.timestamp || Date.now()
           };
-          
+
           console.log('[BWE] New alert:', alert.symbol, (alert.changePercent > 0 ? '+' : '') + alert.changePercent + '%');
           pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts);
         }
@@ -316,11 +315,11 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
         if (app) app.log.error(e, '[BWE] Error processing message');
       }
     });
-    
+
     ws.on('error', (e) => {
       if (app) app.log.error(`[BWE] Error: ${e?.message || e}`);
     });
-    
+
     ws.on('close', () => {
       if (pingInterval) clearInterval(pingInterval);
       if (app) app.log.warn('[BWE] Connection closed, reconnecting in 5s');
@@ -335,7 +334,7 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
 // Push volatility alert
 function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
   if (!alert || !alert.symbol) return;
-  
+
   const alertData = {
     id: alert.id || nanoid(),
     symbol: String(alert.symbol).toUpperCase().slice(0, 20),
@@ -346,12 +345,12 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
     alert_type: String(alert.type || 'VOLATILITY').slice(0, 20),
     timestamp: alert.timestamp || Date.now()
   };
-  
+
   memoryVolatilityAlerts.push(alertData);
   if (memoryVolatilityAlerts.length > 100) {
     memoryVolatilityAlerts = memoryVolatilityAlerts.slice(-100);
   }
-  
+
   if (pgClient) {
     try {
       pgClient.query(
@@ -372,7 +371,7 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
       if (app) app.log.error(e, 'Failed to persist volatility alert');
     }
   }
-  
+
   broadcastVolatilityAlert({
     id: alertData.id,
     symbol: alertData.symbol,
