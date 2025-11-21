@@ -84,6 +84,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     return reply.send(buf);
   } catch (e) {
     const code = e?.name === 'AbortError' ? 504 : 502;
+    console.error(`[FORWARDER] ${method} ${upstreamUrl} failed:`, e?.message || e);
     return reply.code(code).send({ error: 'Upstream error' });
   }
 }

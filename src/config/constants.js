@@ -9,7 +9,8 @@ module.exports = {
   DATABASE_URL: process.env.DATABASE_URL || process.env.POSTGRES_URL || '',
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
   ENABLE_TRADE_EVENTS_READ: String(process.env.ENABLE_TRADE_EVENTS_READ || 'false').toLowerCase() === 'true',
-  UPSTREAM_TIMEOUT_MS: Number(process.env.UPSTREAM_TIMEOUT_MS || 5000),
+  // Some upstreams (Blofin) are slow to respond; give them more time by default
+  UPSTREAM_TIMEOUT_MS: Number(process.env.UPSTREAM_TIMEOUT_MS || 15000),
   
   // CORS origins configuration
   getAllowedOrigins: () => {
@@ -57,7 +58,7 @@ module.exports = {
     keepAliveMsecs: 30000,
     maxSockets: 100,
     maxFreeSockets: 10,
-    timeout: 5000,
+    timeout: 15000,
     scheduling: 'fifo'
   }),
   
@@ -66,7 +67,7 @@ module.exports = {
     keepAliveMsecs: 30000,
     maxSockets: 100,
     maxFreeSockets: 10,
-    timeout: 5000,
+    timeout: 15000,
     scheduling: 'fifo'
   }),
   
