@@ -10,7 +10,7 @@
     "build": "echo 'No build step required'"
   },
   "dependencies": {
-    "@fastify/compress": "^8.3.0",
+    "@fastify/compress": "^7.0.3",
     "@fastify/cors": "^8.5.0",
     "@fastify/websocket": "^8.3.1",
     "fastify": "^4.28.1",
