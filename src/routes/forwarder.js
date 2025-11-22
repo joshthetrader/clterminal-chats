@@ -3,7 +3,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
+const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 
 const TICKER_CACHE_TTL = 300000; // 5m shared cache
@@ -71,24 +71,24 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const origin = req.headers.origin || '*';
 
     const performRequest = async () => {
-      const fetchStart = Date.now();
-      const res = await fetch(upstreamUrl, {
-        method,
-        headers: sanitized,
-        body,
-        signal: controller.signal,
-        agent
-      }).catch((e) => {
-        throw e;
-      });
-      clearTimeout(t);
-
-      const fetchTime = Date.now() - fetchStart;
-      const totalTime = Date.now() - startTime;
-
-      if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
-        console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
-      }
+    const fetchStart = Date.now();
+    const res = await fetch(upstreamUrl, {
+      method,
+      headers: sanitized,
+      body,
+      signal: controller.signal,
+      agent
+    }).catch((e) => {
+      throw e;
+    });
+    clearTimeout(t);
+    
+    const fetchTime = Date.now() - fetchStart;
+    const totalTime = Date.now() - startTime;
+    
+    if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
+      console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+    }
 
       const bodyBuf = Buffer.from(await res.arrayBuffer());
       return {
@@ -102,8 +102,8 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const sendResult = (result, cacheHeader) => {
       reply.code(result.status);
       if (result.contentType) reply.header('content-type', result.contentType);
-      reply.header('Access-Control-Allow-Origin', origin);
-      reply.header('Access-Control-Allow-Credentials', 'true');
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Access-Control-Allow-Credentials', 'true');
       if (cacheHeader) reply.header('X-Ticker-Cache', cacheHeader);
       return reply.send(Buffer.from(result.body));
     };
@@ -240,6 +240,8 @@ module.exports = function (app) {
     handler: async (req, reply) => {
       const suffix = req.params['*'] || '';
       const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://gamma-api.polymarket.com/', suffix, search);
+      return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
     }
   });
 };

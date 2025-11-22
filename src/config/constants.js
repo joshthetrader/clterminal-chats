@@ -52,6 +52,10 @@ module.exports = {
     'api-key','sign','timestamp','nonce','content-type'
   ]),
   
+  POLYMARKET_ALLOWED_HEADERS: new Set([
+    'content-type','accept','accept-language'
+  ]),
+  
   // HTTP/HTTPS agents for connection pooling
   httpsAgent: new https.Agent({
     keepAlive: true,
