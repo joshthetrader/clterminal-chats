@@ -45,6 +45,10 @@ module.exports = function(app) {
 
       broadcastPresence(room);
 
+      ws.on('error', (err) => {
+        console.error('[WS Chat] Connection error:', err.message);
+      });
+
       ws.on('message', async (raw) => {
         let msg = null;
         try { msg = JSON.parse(String(raw)); } catch (_) {}
@@ -148,6 +152,10 @@ module.exports = function(app) {
         }
       }, 5000);
 
+      ws.on('error', (err) => {
+        console.error('[WS News] Connection error:', err.message);
+      });
+
       ws.on('message', (raw) => {
         if (subscribed) return;
         try {
@@ -155,7 +163,7 @@ module.exports = function(app) {
           if (data?.type === 'subscribe' && data?.feed === 'news') {
             subscribed = true;
             clearTimeout(timeout);
-            newsClients.add(ws);
+      newsClients.add(ws);
             return;
           }
         } catch (_) {}
@@ -181,35 +189,39 @@ module.exports = function(app) {
       }, 5000);
 
       const sendHistory = async () => {
-        console.log('[Volatility] Client connected, sending last 10 alerts');
-        try {
-          let alerts = [];
-          if (storage.pgClient) {
-            const result = await storage.pgClient.query(
-              `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, EXTRACT(EPOCH FROM created_at) * 1000 as ts
-               FROM volatility_alerts
-               ORDER BY created_at DESC
-               LIMIT 10`
-            );
-            alerts = result.rows.reverse().map(row => ({
-              id: row.id,
-              symbol: row.symbol,
-              exchange: row.exchange,
-              price: Number(row.price),
-              changePercent: Number(row.change_percent),
-              volume: Number(row.volume),
-              type: row.alert_type,
-              timestamp: Number(row.ts)
-            }));
-          } else {
-            alerts = storage.memoryVolatilityAlerts.slice(-10);
-          }
-          
-          ws.send(JSON.stringify({ type: 'history', alerts }));
-        } catch (e) {
-          fastify.log.error(e, 'Failed to fetch volatility history');
+      console.log('[Volatility] Client connected, sending last 10 alerts');
+      try {
+        let alerts = [];
+        if (storage.pgClient) {
+          const result = await storage.pgClient.query(
+            `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, EXTRACT(EPOCH FROM created_at) * 1000 as ts
+             FROM volatility_alerts
+             ORDER BY created_at DESC
+             LIMIT 10`
+          );
+          alerts = result.rows.reverse().map(row => ({
+            id: row.id,
+            symbol: row.symbol,
+            exchange: row.exchange,
+            price: Number(row.price),
+            changePercent: Number(row.change_percent),
+            volume: Number(row.volume),
+            type: row.alert_type,
+            timestamp: Number(row.ts)
+          }));
+        } else {
+          alerts = storage.memoryVolatilityAlerts.slice(-10);
         }
+        
+        ws.send(JSON.stringify({ type: 'history', alerts }));
+      } catch (e) {
+        fastify.log.error(e, 'Failed to fetch volatility history');
+      }
       };
+
+      ws.on('error', (err) => {
+        console.error('[WS Volatility] Connection error:', err.message);
+      });
 
       ws.on('message', async (raw) => {
         if (subscribed) return;
@@ -229,7 +241,7 @@ module.exports = function(app) {
       ws.on('close', () => { 
         clearTimeout(subscribeTimeout);
         if (subscribed) {
-          try { volatilityClients.delete(ws); } catch (_) {}
+        try { volatilityClients.delete(ws); } catch (_) {} 
         }
         console.log('[Volatility] Client disconnected');
       });
