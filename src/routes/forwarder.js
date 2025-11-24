@@ -10,6 +10,10 @@ const TICKER_CACHE_TTL = 300000; // 5m shared cache
 const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
 const pendingTickerFetches = new Map(); // cacheKey -> Promise
 
+const POLYMARKET_CACHE_TTL = 180000; // 3m cache for Polymarket data
+const polymarketCache = new Map(); // cacheKey -> { status, contentType, body, ts }
+const pendingPolymarketFetches = new Map(); // cacheKey -> Promise
+
 function setPreflightHeaders(reply, allowHeaders, origin) {
   reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   reply.header('Access-Control-Allow-Headers', allowHeaders);
@@ -25,6 +29,11 @@ const isTickerEndpoint = (parsedUrl) => {
   if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
   return false;
+};
+
+const isPolymarketEndpoint = (parsedUrl) => {
+  const hostname = parsedUrl.hostname;
+  return hostname === 'gamma-api.polymarket.com';
 };
 
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
@@ -66,7 +75,9 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const parsedUrl = new URL(upstreamUrl);
     const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
 
-    const cacheable = method === 'GET' && isTickerEndpoint(parsedUrl);
+    const isTickerRequest = method === 'GET' && isTickerEndpoint(parsedUrl);
+    const isPolymarketRequest = method === 'GET' && isPolymarketEndpoint(parsedUrl);
+    const cacheable = isTickerRequest || isPolymarketRequest;
     const cacheKey = cacheable ? parsedUrl.toString() : null;
     const origin = req.headers.origin || '*';
 
@@ -104,18 +115,29 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
       if (result.contentType) reply.header('content-type', result.contentType);
     reply.header('Access-Control-Allow-Origin', origin);
     reply.header('Access-Control-Allow-Credentials', 'true');
-      if (cacheHeader) reply.header('X-Ticker-Cache', cacheHeader);
+      if (cacheHeader) {
+        if (isPolymarketRequest) {
+          reply.header('X-Polymarket-Cache', cacheHeader);
+        } else {
+          reply.header('X-Ticker-Cache', cacheHeader);
+        }
+      }
       return reply.send(Buffer.from(result.body));
     };
 
     if (cacheable && cacheKey) {
-      const cached = tickerCache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < TICKER_CACHE_TTL) {
+      // Select appropriate cache based on endpoint type
+      const cache = isPolymarketRequest ? polymarketCache : tickerCache;
+      const pendingFetches = isPolymarketRequest ? pendingPolymarketFetches : pendingTickerFetches;
+      const cacheTTL = isPolymarketRequest ? POLYMARKET_CACHE_TTL : TICKER_CACHE_TTL;
+
+      const cached = cache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < cacheTTL) {
         return sendResult(cached, 'HIT');
       }
 
-      if (pendingTickerFetches.has(cacheKey)) {
-        const pendingResult = await pendingTickerFetches.get(cacheKey);
+      if (pendingFetches.has(cacheKey)) {
+        const pendingResult = await pendingFetches.get(cacheKey);
         if (pendingResult) {
           return sendResult(pendingResult, 'HIT');
         }
@@ -123,7 +145,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
 
       const execPromise = performRequest().then(result => {
         if (result.ok) {
-          tickerCache.set(cacheKey, {
+          cache.set(cacheKey, {
             status: result.status,
             contentType: result.contentType,
             body: Buffer.from(result.body),
@@ -132,9 +154,9 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
         }
         return result;
       }).finally(() => {
-        pendingTickerFetches.delete(cacheKey);
+        pendingFetches.delete(cacheKey);
       });
-      pendingTickerFetches.set(cacheKey, execPromise);
+      pendingFetches.set(cacheKey, execPromise);
 
       const freshResult = await execPromise;
       return sendResult(freshResult, freshResult.ok ? 'MISS' : 'BYPASS');
@@ -244,6 +266,25 @@ module.exports = function (app) {
       return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
     }
   });
+
+  // Periodic cache cleanup to prevent memory growth
+  setInterval(() => {
+    const now = Date.now();
+    
+    // Clean ticker cache
+    for (const [key, entry] of tickerCache.entries()) {
+      if (now - entry.ts > TICKER_CACHE_TTL) {
+        tickerCache.delete(key);
+      }
+    }
+    
+    // Clean Polymarket cache
+    for (const [key, entry] of polymarketCache.entries()) {
+      if (now - entry.ts > POLYMARKET_CACHE_TTL) {
+        polymarketCache.delete(key);
+      }
+    }
+  }, 60000); // Clean every minute
 };
 
 
