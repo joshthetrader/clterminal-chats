@@ -10,32 +10,44 @@ const TICKER_CACHE_TTL = 300000; // 5m shared cache
 const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
 const pendingTickerFetches = new Map(); // cacheKey -> Promise
 
-// Polymarket optimization cache
+// Polymarket optimization cache (server-side)
 const POLYMARKET_CACHE_TTL = 300000; // 5 minutes
 const polymarketCache = new Map(); // cacheKey -> { status, contentType, body, ts }
 const pendingPolymarketFetches = new Map(); // cacheKey -> Promise
 
-// Strip Polymarket response to only necessary fields
+// Strip Polymarket /events response to only the fields required by the frontend parser.
+// We keep just enough structure so the existing polymarketStore.js parseMarkets()
+// continues to work without any changes.
 const stripPolymarketResponse = (data) => {
   if (!Array.isArray(data)) return data;
-  
-  return data.map(event => {
-    const markets = Array.isArray(event.markets) ? event.markets.map(m => ({
-      outcomes: m.outcomes,
-      outcomePrices: m.outcomePrices,
-      question: m.question,
-      conditionId: m.conditionId,
-      id: m.id
-    })) : [];
-    
+
+  return data.map((event) => {
+    const markets = Array.isArray(event.markets)
+      ? event.markets.map((m) => ({
+          id: m.id,
+          conditionId: m.conditionId,
+          question: m.question,
+          groupItemTitle: m.groupItemTitle,
+          // Frontend only needs these two to compute probabilities
+          outcomes: m.outcomes,
+          outcomePrices: m.outcomePrices,
+          // For single-market path (SMP) where market = eventMarkets[0]
+          endDate: m.endDate,
+          endDateIso: m.endDateIso
+        }))
+      : [];
+
     return {
       id: event.id,
       title: event.title,
-      endDate: event.endDate || event.endDateIso,
-      markets,
+      // Used by GMP path: new Date(event.endDate || event.endDateIso)
+      endDate: event.endDate,
+      endDateIso: event.endDateIso,
+      // Icon for display (fallback to image if present)
       icon: event.icon || event.image || null,
-      volume: event.volume
-      // Stripped: description, liquidity, all other fields
+      volume: event.volume,
+      markets
+      // Everything else (description, tags, extra metadata) is intentionally stripped
     };
   });
 };
@@ -259,11 +271,12 @@ module.exports = function (app) {
     }
   });
 
-  // Polymarket with optimizations
+  // Polymarket with real optimizations (DTO + cache + dedup)
   app.options('/api/polymarket/*', async (req, reply) => {
     setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
     return reply.send();
   });
+
   app.route({
     method: ['GET', 'POST', 'PUT', 'DELETE'],
     url: '/api/polymarket/*',
@@ -271,19 +284,17 @@ module.exports = function (app) {
       const suffix = req.params['*'] || '';
       const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
       const upstream = buildUpstreamUrl('https://gamma-api.polymarket.com/', suffix, search);
-      const isGetEvents = req.method === 'GET' && suffix.includes('/events');
       const origin = req.headers.origin || '*';
-      
-      if (!isGetEvents) {
-        // Non-cacheable endpoints bypass optimization
+
+      const isEvents = req.method === 'GET' && suffix.toLowerCase().startsWith('events');
+      if (!isEvents) {
+        // Non-events endpoints: just proxy as before
         return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
       }
-      
-      // ========== POLYMARKET OPTIMIZATION ==========
-      // 1. Cache & Dedup for /events endpoints
+
       const cacheKey = upstream.toString();
-      
-      // Check cache first
+
+      // 1) Cache HIT
       const cached = polymarketCache.get(cacheKey);
       if (cached && Date.now() - cached.ts < POLYMARKET_CACHE_TTL) {
         console.log(`✅ [Polymarket] Cache HIT for ${suffix}`);
@@ -293,8 +304,8 @@ module.exports = function (app) {
         reply.header('X-Polymarket-Cache', 'HIT');
         return reply.send(Buffer.from(cached.body));
       }
-      
-      // Check if already fetching
+
+      // 2) In-flight request (dedup)
       if (pendingPolymarketFetches.has(cacheKey)) {
         console.log(`⏳ [Polymarket] Dedup - Waiting for in-flight request: ${suffix}`);
         const pendingResult = await pendingPolymarketFetches.get(cacheKey);
@@ -304,83 +315,76 @@ module.exports = function (app) {
         reply.header('X-Polymarket-Cache', 'HIT');
         return reply.send(Buffer.from(pendingResult.body));
       }
-      
-      // Fetch and strip response
+
+      // 3) Fresh fetch from Gamma
       const startTime = Date.now();
-      const fetchPromise = (async () => {
+      const execPromise = (async () => {
+        const controller = new AbortController();
+        const timeoutMs = Number(UPSTREAM_TIMEOUT_MS || 5000);
+        const t = setTimeout(() => controller.abort(), timeoutMs);
+
+        const parsedUrl = new URL(upstream);
+        const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
+
         try {
-          const result = await forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
-          
-          // This won't work with the current forwardRequest signature
-          // Instead, we'll make the request directly
+          const res = await fetch(upstream, {
+            method: 'GET',
+            headers: { 'User-Agent': 'clterminal-chats' },
+            signal: controller.signal,
+            agent
+          });
+
+          clearTimeout(t);
+          const rawBuf = Buffer.from(await res.arrayBuffer());
+          let bodyBuf = rawBuf;
+
+          try {
+            const jsonData = JSON.parse(rawBuf.toString('utf8'));
+            const stripped = stripPolymarketResponse(jsonData);
+            const strippedJson = JSON.stringify(stripped);
+            bodyBuf = Buffer.from(strippedJson, 'utf8');
+            console.log(
+              `✅ [Polymarket] MISS - Stripped ${Math.round(rawBuf.length / 1024)}KB → ${Math.round(bodyBuf.length / 1024)}KB`
+            );
+          } catch (e) {
+            console.warn('[Polymarket] Failed to strip response, sending raw JSON:', e.message);
+          }
+
+          const result = {
+            status: res.status,
+            contentType: res.headers.get('content-type') || 'application/json',
+            body: bodyBuf
+          };
+
+          if (res.ok) {
+            polymarketCache.set(cacheKey, {
+              ...result,
+              ts: Date.now()
+            });
+          }
+
           return result;
+        } catch (e) {
+          console.error(`[Polymarket] Fetch failed:`, e?.message || e);
+          throw e;
         } finally {
           pendingPolymarketFetches.delete(cacheKey);
         }
       })();
-      
-      // For now, delegate to standard forwarder but with cache strip
-      // We need to make the actual request here for caching
+
+      pendingPolymarketFetches.set(cacheKey, execPromise);
+
       try {
-        const controller = new AbortController();
-        const timeoutMs = Number(5000);
-        const t = setTimeout(() => controller.abort(), timeoutMs);
-        
-        const parsedUrl = new URL(upstream);
-        const agent = parsedUrl.protocol === 'https:' ? require('../config/constants').httpsAgent : require('../config/constants').httpAgent;
-        
-        const execPromise = fetch(upstream, {
-          method: 'GET',
-          headers: { 'User-Agent': 'clterminal-chats' },
-          signal: controller.signal,
-          agent
-        }).then(async (res) => {
-          clearTimeout(t);
-          const responseBody = await res.arrayBuffer();
-          let body;
-          
-          try {
-            const jsonData = JSON.parse(Buffer.from(responseBody).toString());
-            const stripped = stripPolymarketResponse(jsonData);
-            body = Buffer.from(JSON.stringify(stripped));
-            console.log(`✅ [Polymarket] MISS - Fetched & stripped response (${Math.round(responseBody.byteLength / 1024)}KB → ${Math.round(body.length / 1024)}KB)`);
-          } catch (e) {
-            body = Buffer.from(responseBody);
-            console.log(`⚠️  [Polymarket] Could not parse response, sending as-is`);
-          }
-          
-          return {
-            status: res.status,
-            contentType: res.headers.get('content-type') || 'application/json',
-            body
-          };
-        }).catch((e) => {
-          const code = e?.name === 'AbortError' ? 504 : 502;
-          console.error(`❌ [Polymarket] Fetch failed: ${e?.message}`);
-          throw e;
-        });
-        
-        pendingPolymarketFetches.set(cacheKey, execPromise);
         const result = await execPromise;
-        
-        // Cache the result
-        polymarketCache.set(cacheKey, {
-          status: result.status,
-          contentType: result.contentType,
-          body: Buffer.from(result.body),
-          ts: Date.now()
-        });
-        
         const totalTime = Date.now() - startTime;
         console.log(`⏱️  [Polymarket] Request completed in ${totalTime}ms`);
-        
+
         reply.code(result.status);
         reply.header('content-type', result.contentType);
         reply.header('Access-Control-Allow-Origin', origin);
         reply.header('X-Polymarket-Cache', 'MISS');
         return reply.send(Buffer.from(result.body));
       } catch (e) {
-        console.error(`[Polymarket] Error:`, e?.message);
         reply.code(502);
         reply.header('Access-Control-Allow-Origin', origin);
         return reply.send({ error: 'Upstream error' });
