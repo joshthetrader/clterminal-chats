@@ -29,22 +29,7 @@ module.exports = function(app) {
   // Main chat WebSocket
   app.register(async function (fastify) {
     fastify.get('/ws', { websocket: true }, (connection, req) => {
-      let ws;
-      try {
-        ws = connection.socket;
-        
-        // Guard against invalid WebSocket connections
-        if (!ws || ws.readyState !== 1) {
-          console.warn('[WS Chat] Invalid connection attempt, readyState:', ws?.readyState);
-          try { ws?.close(); } catch (_) {}
-          return;
-        }
-      } catch (err) {
-        console.error('[WS Chat] Connection handler error:', err.message);
-        try { ws?.close(); } catch (_) {}
-        return;
-      }
-
+      const ws = connection.socket;
       let user = { name: 'Anon', color: '#aaa' };
       let clientId = null;
       const room = 'global';
@@ -59,10 +44,6 @@ module.exports = function(app) {
       activeConnections.get(room).add(connectionId);
 
       broadcastPresence(room);
-
-      ws.on('error', (err) => {
-        console.error('[WS Chat] Connection error:', err.message);
-      });
 
       ws.on('message', async (raw) => {
         let msg = null;
@@ -167,10 +148,6 @@ module.exports = function(app) {
         }
       }, 5000);
 
-      ws.on('error', (err) => {
-        console.error('[WS News] Connection error:', err.message);
-      });
-
       ws.on('message', (raw) => {
         if (subscribed) return;
         try {
@@ -233,10 +210,6 @@ module.exports = function(app) {
         fastify.log.error(e, 'Failed to fetch volatility history');
       }
       };
-
-      ws.on('error', (err) => {
-        console.error('[WS Volatility] Connection error:', err.message);
-      });
 
       ws.on('message', async (raw) => {
         if (subscribed) return;

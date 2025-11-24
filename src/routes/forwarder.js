@@ -10,10 +10,6 @@ const TICKER_CACHE_TTL = 300000; // 5m shared cache
 const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
 const pendingTickerFetches = new Map(); // cacheKey -> Promise
 
-const POLYMARKET_CACHE_TTL = 180000; // 3m cache for Polymarket data
-const polymarketCache = new Map(); // cacheKey -> { status, contentType, body, ts }
-const pendingPolymarketFetches = new Map(); // cacheKey -> Promise
-
 function setPreflightHeaders(reply, allowHeaders, origin) {
   reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   reply.header('Access-Control-Allow-Headers', allowHeaders);
@@ -30,39 +26,6 @@ const isTickerEndpoint = (parsedUrl) => {
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
   return false;
 };
-
-const isPolymarketEndpoint = (parsedUrl) => {
-  const hostname = parsedUrl.hostname;
-  return hostname === 'gamma-api.polymarket.com';
-};
-
-// Strip unnecessary fields from Polymarket response to reduce payload size
-function stripPolymarketResponse(data) {
-  if (!Array.isArray(data)) return data;
-  
-  return data.map(event => ({
-    id: event.id,
-    slug: event.slug,
-    title: event.title,
-    description: event.description ? String(event.description).slice(0, 250) : '',
-    endDate: event.endDate,
-    endDateIso: event.endDateIso,
-    icon: event.icon,
-    image: event.image,
-    markets: Array.isArray(event.markets) ? event.markets.map(m => ({
-      id: m.id,
-      question: m.question,
-      icon: m.icon,
-      image: m.image,
-      outcomePrices: m.outcomePrices,
-      outcomes: m.outcomes,
-      volume: m.volume,
-      clobTokenIds: m.clobTokenIds
-    })) : [],
-    volume: event.volume,
-    liquidity: event.liquidity
-  }));
-}
 
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
   const startTime = Date.now();
@@ -103,9 +66,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const parsedUrl = new URL(upstreamUrl);
     const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
 
-    const isTickerRequest = method === 'GET' && isTickerEndpoint(parsedUrl);
-    const isPolymarketRequest = method === 'GET' && isPolymarketEndpoint(parsedUrl);
-    const cacheable = isTickerRequest || isPolymarketRequest;
+    const cacheable = method === 'GET' && isTickerEndpoint(parsedUrl);
     const cacheKey = cacheable ? parsedUrl.toString() : null;
     const origin = req.headers.origin || '*';
 
@@ -143,29 +104,18 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
       if (result.contentType) reply.header('content-type', result.contentType);
     reply.header('Access-Control-Allow-Origin', origin);
     reply.header('Access-Control-Allow-Credentials', 'true');
-      if (cacheHeader) {
-        if (isPolymarketRequest) {
-          reply.header('X-Polymarket-Cache', cacheHeader);
-        } else {
-          reply.header('X-Ticker-Cache', cacheHeader);
-        }
-      }
+      if (cacheHeader) reply.header('X-Ticker-Cache', cacheHeader);
       return reply.send(Buffer.from(result.body));
     };
 
     if (cacheable && cacheKey) {
-      // Select appropriate cache based on endpoint type
-      const cache = isPolymarketRequest ? polymarketCache : tickerCache;
-      const pendingFetches = isPolymarketRequest ? pendingPolymarketFetches : pendingTickerFetches;
-      const cacheTTL = isPolymarketRequest ? POLYMARKET_CACHE_TTL : TICKER_CACHE_TTL;
-
-      const cached = cache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < cacheTTL) {
+      const cached = tickerCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < TICKER_CACHE_TTL) {
         return sendResult(cached, 'HIT');
       }
 
-      if (pendingFetches.has(cacheKey)) {
-        const pendingResult = await pendingFetches.get(cacheKey);
+      if (pendingTickerFetches.has(cacheKey)) {
+        const pendingResult = await pendingTickerFetches.get(cacheKey);
         if (pendingResult) {
           return sendResult(pendingResult, 'HIT');
         }
@@ -173,32 +123,18 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
 
       const execPromise = performRequest().then(result => {
         if (result.ok) {
-          let bodyToCache = result.body;
-          
-          // Strip Polymarket responses to reduce payload size (disabled for debugging)
-          if (false && isPolymarketRequest && result.contentType?.includes('application/json')) {
-            try {
-              const jsonData = JSON.parse(bodyToCache.toString());
-              const stripped = stripPolymarketResponse(jsonData);
-              bodyToCache = Buffer.from(JSON.stringify(stripped));
-              result.body = bodyToCache; // Update result body too
-            } catch (e) {
-              fastify.log.warn('Failed to strip Polymarket response:', e.message);
-            }
-          }
-          
-          cache.set(cacheKey, {
+          tickerCache.set(cacheKey, {
             status: result.status,
             contentType: result.contentType,
-            body: Buffer.from(bodyToCache),
+            body: Buffer.from(result.body),
             ts: Date.now()
           });
         }
         return result;
       }).finally(() => {
-        pendingFetches.delete(cacheKey);
+        pendingTickerFetches.delete(cacheKey);
       });
-      pendingFetches.set(cacheKey, execPromise);
+      pendingTickerFetches.set(cacheKey, execPromise);
 
       const freshResult = await execPromise;
       return sendResult(freshResult, freshResult.ok ? 'MISS' : 'BYPASS');
@@ -308,25 +244,6 @@ module.exports = function (app) {
       return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
     }
   });
-
-  // Periodic cache cleanup to prevent memory growth
-  setInterval(() => {
-    const now = Date.now();
-    
-    // Clean ticker cache
-    for (const [key, entry] of tickerCache.entries()) {
-      if (now - entry.ts > TICKER_CACHE_TTL) {
-        tickerCache.delete(key);
-      }
-    }
-    
-    // Clean Polymarket cache
-    for (const [key, entry] of polymarketCache.entries()) {
-      if (now - entry.ts > POLYMARKET_CACHE_TTL) {
-        polymarketCache.delete(key);
-    }
-    }
-  }, 60000); // Clean every minute
 };
 
 

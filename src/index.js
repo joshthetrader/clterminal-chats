@@ -20,13 +20,7 @@ const apiRoutes = require('./routes/api');
 const wsRoutes = require('./routes/websocket');
 
 const app = Fastify({ logger: true });
-app.register(fastifyWebsocket, {
-  errorHandler: function (error, conn, req, reply) {
-    // Suppress WebSocket connection errors to prevent 500 spam
-    app.log.warn('WebSocket connection error:', error.message);
-    conn.destroy(error);
-  }
-});
+app.register(fastifyWebsocket);
 
 // CORS setup
 app.register(fastifyCors, {
