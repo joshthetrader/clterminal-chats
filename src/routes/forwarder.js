@@ -324,7 +324,7 @@ module.exports = function (app) {
     for (const [key, entry] of polymarketCache.entries()) {
       if (now - entry.ts > POLYMARKET_CACHE_TTL) {
         polymarketCache.delete(key);
-      }
+    }
     }
   }, 60000); // Clean every minute
 };
