@@ -36,6 +36,34 @@ const isPolymarketEndpoint = (parsedUrl) => {
   return hostname === 'gamma-api.polymarket.com';
 };
 
+// Strip unnecessary fields from Polymarket response to reduce payload size
+function stripPolymarketResponse(data) {
+  if (!Array.isArray(data)) return data;
+  
+  return data.map(event => ({
+    id: event.id,
+    slug: event.slug,
+    title: event.title,
+    description: event.description ? String(event.description).slice(0, 250) : '',
+    endDate: event.endDate,
+    endDateIso: event.endDateIso,
+    icon: event.icon,
+    image: event.image,
+    markets: Array.isArray(event.markets) ? event.markets.map(m => ({
+      id: m.id,
+      question: m.question,
+      icon: m.icon,
+      image: m.image,
+      outcomePrices: m.outcomePrices,
+      outcomes: m.outcomes,
+      volume: m.volume,
+      clobTokenIds: m.clobTokenIds
+    })) : [],
+    volume: event.volume,
+    liquidity: event.liquidity
+  }));
+}
+
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
   const startTime = Date.now();
   try {
@@ -145,10 +173,24 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
 
       const execPromise = performRequest().then(result => {
         if (result.ok) {
+          let bodyToCache = result.body;
+          
+          // Strip Polymarket responses to reduce payload size
+          if (isPolymarketRequest && result.contentType?.includes('application/json')) {
+            try {
+              const jsonData = JSON.parse(bodyToCache.toString());
+              const stripped = stripPolymarketResponse(jsonData);
+              bodyToCache = Buffer.from(JSON.stringify(stripped));
+              result.body = bodyToCache; // Update result body too
+            } catch (e) {
+              fastify.log.warn('Failed to strip Polymarket response:', e.message);
+            }
+          }
+          
           cache.set(cacheKey, {
             status: result.status,
             contentType: result.contentType,
-            body: Buffer.from(result.body),
+            body: Buffer.from(bodyToCache),
             ts: Date.now()
           });
         }
