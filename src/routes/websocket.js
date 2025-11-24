@@ -29,7 +29,22 @@ module.exports = function(app) {
   // Main chat WebSocket
   app.register(async function (fastify) {
     fastify.get('/ws', { websocket: true }, (connection, req) => {
-      const ws = connection.socket;
+      let ws;
+      try {
+        ws = connection.socket;
+        
+        // Guard against invalid WebSocket connections
+        if (!ws || ws.readyState !== 1) {
+          console.warn('[WS Chat] Invalid connection attempt, readyState:', ws?.readyState);
+          try { ws?.close(); } catch (_) {}
+          return;
+        }
+      } catch (err) {
+        console.error('[WS Chat] Connection handler error:', err.message);
+        try { ws?.close(); } catch (_) {}
+        return;
+      }
+
       let user = { name: 'Anon', color: '#aaa' };
       let clientId = null;
       const room = 'global';
