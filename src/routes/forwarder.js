@@ -175,8 +175,8 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
         if (result.ok) {
           let bodyToCache = result.body;
           
-          // Strip Polymarket responses to reduce payload size
-          if (isPolymarketRequest && result.contentType?.includes('application/json')) {
+          // Strip Polymarket responses to reduce payload size (disabled for debugging)
+          if (false && isPolymarketRequest && result.contentType?.includes('application/json')) {
             try {
               const jsonData = JSON.parse(bodyToCache.toString());
               const stripped = stripPolymarketResponse(jsonData);
