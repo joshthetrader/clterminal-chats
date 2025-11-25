@@ -67,6 +67,7 @@ const isTickerEndpoint = (parsedUrl) => {
   if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
   if (hostname === 'api.mexc.com' && pathname.includes('/ticker/24hr')) return true;
+  if (hostname === 'contract.mexc.com' && pathname.includes('/contract/ticker')) return true;
   return false;
 };
 
@@ -405,6 +406,22 @@ module.exports = function (app) {
       const suffix = req.params['*'] || '';
       const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
       const upstream = buildUpstreamUrl('https://api.mexc.com/', suffix, search);
+      return forwardRequest(upstream, req, reply, MEXC_ALLOWED_HEADERS);
+    }
+  });
+
+  // MEXC futures API (contract)
+  app.options('/api/mexc-contract/*', async (req, reply) => {
+    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
+    return reply.send();
+  });
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE'],
+    url: '/api/mexc-contract/*',
+    handler: async (req, reply) => {
+      const suffix = req.params['*'] || '';
+      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://contract.mexc.com/', suffix, search);
       return forwardRequest(upstream, req, reply, MEXC_ALLOWED_HEADERS);
     }
   });

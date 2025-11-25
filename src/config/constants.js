@@ -42,7 +42,8 @@ module.exports = {
     'fapi.bitunix.com',
     'api.bitunix.com',
     'gamma-api.polymarket.com',
-    'api.mexc.com'
+    'api.mexc.com',
+    'contract.mexc.com'
   ]),
   
   BLOFIN_ALLOWED_HEADERS: new Set([
