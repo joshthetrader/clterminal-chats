@@ -46,6 +46,17 @@ app.register(fastifyCompress, {
   threshold: 1024
 });
 
+// Global error handler
+app.setErrorHandler((error, request, reply) => {
+  app.log.error(`❌ [${request.method} ${request.url}] Error:`, error.message);
+  reply.status(error.statusCode || 500).send({
+    error: true,
+    message: error.message || 'Internal server error',
+    path: request.url,
+    method: request.method
+  });
+});
+
 // Healthcheck endpoints
 app.get('/health', async () => ({ ok: true }));
 app.get('/version', async () => ({ name: 'crypto-legends-chat-server', version: '0.1.1' }));
