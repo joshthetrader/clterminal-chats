@@ -30,25 +30,19 @@ module.exports = function(app) {
   app.register(async function (fastify) {
     // Log all WebSocket connection attempts with details
     fastify.addHook('preHandler', async (request, reply) => {
-      const pathNames = {
-        '/ws': 'CHAT',
-        '/ws-news': 'NEWS',
-        '/ws-volatility': 'VOLATILITY'
-      };
-      const pathName = pathNames[request.url];
-      
-      if (pathName) {
+      if (request.url === '/ws' || request.url === '/ws-news' || request.url === '/ws-volatility') {
         const details = {
           timestamp: new Date().toISOString(),
-          service: pathName,
           method: request.method,
           path: request.url,
           ip: request.ip,
           host: request.hostname,
           userAgent: request.headers['user-agent']?.substring(0, 80),
-          protocol: request.protocol
+          protocol: request.protocol,
+          remoteAddress: request.socket.remoteAddress,
+          remotePort: request.socket.remotePort
         };
-        console.log(`🔌 [${pathName}-WS-REQUEST] ${JSON.stringify(details)}`);
+        console.log(`🔌 [WS-REQUEST] ${JSON.stringify(details)}`);
       }
     });
 
@@ -61,9 +55,8 @@ module.exports = function(app) {
         const connectionId = Math.random().toString(36).slice(2);
         const clientIp = req.ip || 'unknown';
         const startTime = Date.now();
-        const SERVICE = 'CHAT';
 
-        console.log(`✅ [${SERVICE}-WS ${connectionId}] Connection established - IP: ${clientIp}, Host: ${req.hostname}, UA: ${req.headers['user-agent']?.substring(0, 50)}`);
+        console.log(`✅ [WS ${connectionId}] Connection established - IP: ${clientIp}, Host: ${req.hostname}, UserAgent: ${req.headers['user-agent']?.substring(0, 60)}`);
 
         if (!rooms.has(room)) rooms.set(room, new Set());
         rooms.get(room).add(ws);
@@ -89,7 +82,7 @@ module.exports = function(app) {
                 color: String(msg?.user?.color || '#aaa').match(/^#[0-9A-Fa-f]{6}$/) ? msg.user.color : '#aaa'
               };
               clientId = msg.clientId ? String(msg.clientId).slice(0, 40) : null;
-              console.log(`👤 [${SERVICE}-WS ${connectionId}] User: ${user.name} (${user.color}), clientId: ${clientId}`);
+              console.log(`👤 [WS ${connectionId}] User hello: ${user.name} (${user.color}), clientId: ${clientId}`);
               ws.send(JSON.stringify({ type: 'welcome', room, user }));
               broadcastPresence(room);
               return;
@@ -252,8 +245,7 @@ module.exports = function(app) {
         const ws = connection.socket;
         let subscribed = false;
         const connectionId = Math.random().toString(36).slice(2);
-        const SERVICE = 'NEWS';
-        console.log(`📰 [${SERVICE}-WS ${connectionId}] Connection opened from ${req.ip}`);
+        console.log(`📰 [News WS ${connectionId}] Connection opened`);
         
         const timeout = setTimeout(() => {
           if (!subscribed) {
@@ -304,8 +296,7 @@ module.exports = function(app) {
         const ws = connection.socket;
         let subscribed = false;
         const connectionId = Math.random().toString(36).slice(2);
-        const SERVICE = 'VOLATILITY';
-        console.log(`📊 [${SERVICE}-WS ${connectionId}] Connection opened from ${req.ip}`);
+        console.log(`📊 [Volatility WS ${connectionId}] Connection opened`);
         
         const subscribeTimeout = setTimeout(() => {
           if (!subscribed) {

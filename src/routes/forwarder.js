@@ -289,7 +289,7 @@ module.exports = function (app) {
       const isEvents = req.method === 'GET' && suffix.toLowerCase().startsWith('events');
       if (!isEvents) {
         // Non-events endpoints: just proxy as before
-        return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
+      return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
       }
 
       const cacheKey = upstream.toString();
