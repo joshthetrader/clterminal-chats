@@ -41,7 +41,8 @@ module.exports = {
     'openapi.blofin.com',
     'fapi.bitunix.com',
     'api.bitunix.com',
-    'gamma-api.polymarket.com'
+    'gamma-api.polymarket.com',
+    'api.mexc.com'
   ]),
   
   BLOFIN_ALLOWED_HEADERS: new Set([
@@ -54,6 +55,10 @@ module.exports = {
   
   POLYMARKET_ALLOWED_HEADERS: new Set([
     'content-type','accept','accept-language'
+  ]),
+  
+  MEXC_ALLOWED_HEADERS: new Set([
+    'content-type'
   ]),
   
   // HTTP/HTTPS agents for connection pooling

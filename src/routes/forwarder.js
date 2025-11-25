@@ -3,7 +3,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
+const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, MEXC_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 
 const TICKER_CACHE_TTL = 300000; // 5m shared cache
@@ -66,6 +66,7 @@ const isTickerEndpoint = (parsedUrl) => {
 
   if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
+  if (hostname === 'api.mexc.com' && pathname.includes('/ticker/24hr')) return true;
   return false;
 };
 
@@ -389,6 +390,22 @@ module.exports = function (app) {
         reply.header('Access-Control-Allow-Origin', origin);
         return reply.send({ error: 'Upstream error' });
       }
+    }
+  });
+
+  // MEXC public API
+  app.options('/api/mexc/*', async (req, reply) => {
+    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
+    return reply.send();
+  });
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE'],
+    url: '/api/mexc/*',
+    handler: async (req, reply) => {
+      const suffix = req.params['*'] || '';
+      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://api.mexc.com/', suffix, search);
+      return forwardRequest(upstream, req, reply, MEXC_ALLOWED_HEADERS);
     }
   });
 };
