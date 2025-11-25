@@ -28,6 +28,24 @@ function broadcastPresence(room) {
 module.exports = function(app) {
   // Main chat WebSocket
   app.register(async function (fastify) {
+    // Log all WebSocket connection attempts with details
+    fastify.addHook('preHandler', async (request, reply) => {
+      if (request.url === '/ws' || request.url === '/ws-news' || request.url === '/ws-volatility') {
+        const details = {
+          timestamp: new Date().toISOString(),
+          method: request.method,
+          path: request.url,
+          ip: request.ip,
+          host: request.hostname,
+          userAgent: request.headers['user-agent']?.substring(0, 80),
+          protocol: request.protocol,
+          remoteAddress: request.socket.remoteAddress,
+          remotePort: request.socket.remotePort
+        };
+        console.log(`🔌 [WS-REQUEST] ${JSON.stringify(details)}`);
+      }
+    });
+
     fastify.get('/ws', { websocket: true }, (connection, req) => {
       try {
         const ws = connection.socket;
@@ -36,8 +54,9 @@ module.exports = function(app) {
         const room = 'global';
         const connectionId = Math.random().toString(36).slice(2);
         const clientIp = req.ip || 'unknown';
+        const startTime = Date.now();
 
-        console.log(`✅ [WS] Connection established - ID: ${connectionId}, IP: ${clientIp}, Remote: ${req.hostname}`);
+        console.log(`✅ [WS ${connectionId}] Connection established - IP: ${clientIp}, Host: ${req.hostname}, UserAgent: ${req.headers['user-agent']?.substring(0, 60)}`);
 
         if (!rooms.has(room)) rooms.set(room, new Set());
         rooms.get(room).add(ws);
@@ -76,13 +95,16 @@ module.exports = function(app) {
           if (msg.type === 'chat') {
             try {
               if (!checkRateLimit(connectionId)) {
-                console.warn(`⏱️  [WS ${connectionId}] Rate limit exceeded for user ${user.name}`);
+                console.warn(`⏱️  [WS ${connectionId}] Rate limit exceeded - user: ${user.name}, IP: ${clientIp}`);
                 ws.send(JSON.stringify({ type: 'error', message: 'Rate limit exceeded' }));
                 return;
               }
               
               const sanitizedText = sanitizeInput(msg.text);
-              if (!sanitizedText) return;
+              if (!sanitizedText) {
+                console.warn(`[WS ${connectionId}] Empty message from ${user.name}`);
+                return;
+              }
               
               const id = nanoid();
               const payload = {
@@ -95,6 +117,16 @@ module.exports = function(app) {
                 clientId: msg.clientId ? String(msg.clientId).slice(0, 40) : undefined,
                 replyTo: msg.replyTo ? sanitizeName(msg.replyTo) : null
               };
+              
+              const msgDetails = {
+                id,
+                user: user.name,
+                length: sanitizedText.length,
+                hasReply: !!payload.replyTo,
+                clientId: payload.clientId
+              };
+              console.log(`💬 [WS ${connectionId}] Chat message - ${JSON.stringify(msgDetails)}`);
+              
               broadcast(room, payload);
               
               await storage.persistMessage({
@@ -106,10 +138,14 @@ module.exports = function(app) {
                 is_trade: false,
                 reply_to: payload.replyTo,
                 client_id: payload.clientId
-              }).catch(e => console.error(`[WS ${connectionId}] Failed to persist chat:`, e.message));
+              }).catch(e => {
+                const errDetails = { user: user.name, error: e.message, code: e.code };
+                console.error(`❌ [WS ${connectionId}] Persist failed - ${JSON.stringify(errDetails)}`);
+              });
               return;
             } catch (e) {
-              console.error(`[WS ${connectionId}] Error handling chat:`, e.message);
+              const errDetails = { error: e.message, user: user.name, type: 'chat' };
+              console.error(`❌ [WS ${connectionId}] Error - ${JSON.stringify(errDetails)}`);
               ws.send(JSON.stringify({ type: 'error', message: 'Failed to send message' }));
             }
           }
@@ -117,6 +153,11 @@ module.exports = function(app) {
           if (msg.type === 'share') {
             try {
               const id = nanoid();
+              const sym = String(msg.sym || '').toUpperCase().slice(0, 20);
+              const side = /long/i.test(msg.side) ? 'Long' : 'Short';
+              const lev = String(msg.lev || '').slice(0, 6);
+              const entry = String(msg.entry || '').slice(0, 32);
+              
               const payload = {
                 type: 'message',
                 id,
@@ -125,14 +166,24 @@ module.exports = function(app) {
                 ts: Date.now(),
                 tradeShare: true,
                 share: {
-                  sym: String(msg.sym || '').toUpperCase().slice(0, 20),
-                  side: /long/i.test(msg.side) ? 'Long' : 'Short',
-                  lev: String(msg.lev || '').slice(0, 6),
-                  entry: String(msg.entry || '').slice(0, 32)
+                  sym,
+                  side,
+                  lev,
+                  entry
                 },
                 clientId: msg.clientId ? String(msg.clientId).slice(0, 40) : undefined
               };
-              console.log(`📈 [WS ${connectionId}] Trade share: ${payload.share.sym} ${payload.share.side}`);
+              
+              const tradeDetails = {
+                symbol: sym,
+                side,
+                leverage: lev,
+                entry,
+                user: user.name,
+                clientId: payload.clientId
+              };
+              console.log(`📈 [WS ${connectionId}] Trade share - ${JSON.stringify(tradeDetails)}`);
+              
               broadcast(room, payload);
               
               await storage.persistMessage({
@@ -141,15 +192,19 @@ module.exports = function(app) {
                 user_name: user.name,
                 user_color: user.color,
                 is_trade: true,
-                trade_sym: payload.share.sym,
-                trade_side: payload.share.side,
-                trade_lev: payload.share.lev,
-                trade_entry: payload.share.entry,
+                trade_sym: sym,
+                trade_side: side,
+                trade_lev: lev,
+                trade_entry: entry,
                 client_id: payload.clientId
-              }).catch(e => console.error(`[WS ${connectionId}] Failed to persist trade:`, e.message));
+              }).catch(e => {
+                const errDetails = { symbol: sym, side, error: e.message };
+                console.error(`❌ [WS ${connectionId}] Trade persist failed - ${JSON.stringify(errDetails)}`);
+              });
               return;
             } catch (e) {
-              console.error(`[WS ${connectionId}] Error handling share:`, e.message);
+              const errDetails = { error: e.message, type: 'share', user: user.name };
+              console.error(`❌ [WS ${connectionId}] Error - ${JSON.stringify(errDetails)}`);
               ws.send(JSON.stringify({ type: 'error', message: 'Failed to share trade' }));
             }
           }
@@ -163,14 +218,23 @@ module.exports = function(app) {
       });
 
       ws.on('close', () => {
+        const duration = Date.now() - startTime;
         try { rooms.get(room)?.delete(ws); } catch (_) {}
         try { activeConnections.get(room)?.delete(connectionId); } catch (_) {}
         try { cleanupRateLimit(connectionId); } catch (_) {}
-        console.log(`👋 [WS ${connectionId}] Connection closed, user: ${user.name}`);
+        console.log(`👋 [WS ${connectionId}] Connection closed - user: ${user.name}, duration: ${duration}ms`);
         broadcastPresence(room);
       });
       } catch (error) {
-        console.error('❌ [WS] Failed to establish connection:', error.message);
+        const details = {
+          timestamp: new Date().toISOString(),
+          path: '/ws',
+          method: 'GET',
+          ip: clientIp,
+          error: error.message,
+          stack: error.stack?.split('\n')[0]
+        };
+        console.error(`❌ [WS-ERROR] ${JSON.stringify(details)}`);
         try { connection.socket.close(1011, 'Server error'); } catch (_) {}
       }
     });
