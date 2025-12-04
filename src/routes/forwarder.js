@@ -3,7 +3,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, MEXC_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
+const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 
 const TICKER_CACHE_TTL = 300000; // 5m shared cache
@@ -14,6 +14,18 @@ const pendingTickerFetches = new Map(); // cacheKey -> Promise
 const POLYMARKET_CACHE_TTL = 300000; // 5 minutes
 const polymarketCache = new Map(); // cacheKey -> { status, contentType, body, ts }
 const pendingPolymarketFetches = new Map(); // cacheKey -> Promise
+const polymarketPollingIntervals = new Map(); // tagId -> intervalId
+
+// Polymarket tag IDs to poll
+const POLYMARKET_TAGS_TO_POLL = [
+  { id: 21, label: 'crypto' },
+  { id: 2, label: 'politics' },
+  { id: 107, label: 'finance' },
+  { id: 100328, label: 'economy' }
+];
+
+// Track active polls to prevent concurrent polling for same tag
+const pollingInProgress = new Map(); // tagId -> true/false
 
 // Strip Polymarket /events response to only the fields required by the frontend parser.
 // We keep just enough structure so the existing polymarketStore.js parseMarkets()
@@ -66,8 +78,6 @@ const isTickerEndpoint = (parsedUrl) => {
 
   if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
-  if (hostname === 'api.mexc.com' && pathname.includes('/ticker/24hr')) return true;
-  if (hostname === 'contract.mexc.com' && pathname.includes('/contract/ticker')) return true;
   return false;
 };
 
@@ -205,6 +215,14 @@ const warmupConnections = () => {
 setTimeout(warmupConnections, 1000);
 
 module.exports = function (app) {
+  // Start Polymarket background polling
+  startPolymarketPolling();
+  
+  // Stop polling on app termination
+  app.addHook('onClose', () => {
+    stopPolymarketPolling();
+  });
+  
   // Blofin
   app.options('/api/blofin/*', async (req, reply) => {
     setPreflightHeaders(reply, 'Content-Type, ACCESS-KEY, ACCESS-SIGN, ACCESS-TIMESTAMP, ACCESS-PASSPHRASE, ACCESS-NONCE, BROKER-ID', req.headers.origin);
@@ -284,17 +302,31 @@ module.exports = function (app) {
     url: '/api/polymarket/*',
     handler: async (req, reply) => {
       const suffix = req.params['*'] || '';
-      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-      const upstream = buildUpstreamUrl('https://gamma-api.polymarket.com/', suffix, search);
+      const rawSearch = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
       const origin = req.headers.origin || '*';
 
       const isEvents = req.method === 'GET' && suffix.toLowerCase().startsWith('events');
       if (!isEvents) {
         // Non-events endpoints: just proxy as before
-      return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
+        const upstream = buildUpstreamUrl('https://gamma-api.polymarket.com/', suffix, rawSearch);
+        return forwardRequest(upstream, req, reply, POLYMARKET_ALLOWED_HEADERS);
       }
 
-      const cacheKey = upstream.toString();
+      // Handle timeframe filtering on backend
+      const timeframe = req.query?.timeframe || 'all';
+      
+      // Strip custom params that Gamma API doesn't understand
+      let cleanSearch = rawSearch
+        .replace(/[&?]timeframe=[^&]*/g, '')
+        .replace(/[&?]orderBy=[^&]*/g, '');
+      
+      // Add proper Gamma API sorting to get newest markets first
+      if (!cleanSearch.includes('order=')) {
+        cleanSearch += (cleanSearch.includes('?') ? '&' : '?') + 'order=createdAt&ascending=false';
+      }
+      
+      const upstream = buildUpstreamUrl('https://gamma-api.polymarket.com/', suffix, cleanSearch);
+      const cacheKey = `${upstream.toString()}&_timeframe=${timeframe}`;
 
       // 1) Cache HIT
       const cached = polymarketCache.get(cacheKey);
@@ -318,7 +350,7 @@ module.exports = function (app) {
         return reply.send(Buffer.from(pendingResult.body));
       }
 
-      // 3) Fresh fetch from Gamma
+      // 3) Fresh fetch from Gamma (fetch 300 markets, FE will filter)
       const startTime = Date.now();
       const execPromise = (async () => {
         const controller = new AbortController();
@@ -328,8 +360,11 @@ module.exports = function (app) {
         const parsedUrl = new URL(upstream);
         const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
 
+        // Fetch 300 markets for all requests - FE will handle filtering
+        const fetchUrl = upstream.replace(/limit=\d+/, 'limit=300');
+
         try {
-          const res = await fetch(upstream, {
+          const res = await fetch(fetchUrl, {
             method: 'GET',
             headers: { 'User-Agent': 'clterminal-chats' },
             signal: controller.signal,
@@ -342,14 +377,16 @@ module.exports = function (app) {
 
           try {
             const jsonData = JSON.parse(rawBuf.toString('utf8'));
+            
+            // Just strip and return - FE handles filtering
             const stripped = stripPolymarketResponse(jsonData);
             const strippedJson = JSON.stringify(stripped);
             bodyBuf = Buffer.from(strippedJson, 'utf8');
             console.log(
-              `✅ [Polymarket] MISS - Stripped ${Math.round(rawBuf.length / 1024)}KB → ${Math.round(bodyBuf.length / 1024)}KB`
+              `✅ [Polymarket] MISS - Fetched ${Array.isArray(jsonData) ? jsonData.length : '?'} markets, stripped ${Math.round(rawBuf.length / 1024)}KB → ${Math.round(bodyBuf.length / 1024)}KB`
             );
           } catch (e) {
-            console.warn('[Polymarket] Failed to strip response, sending raw JSON:', e.message);
+            console.warn('[Polymarket] Failed to process response:', e.message);
           }
 
           const result = {
@@ -393,38 +430,65 @@ module.exports = function (app) {
       }
     }
   });
+};
 
-  // MEXC public API
-  app.options('/api/mexc/*', async (req, reply) => {
-    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
-    return reply.send();
-  });
-  app.route({
-    method: ['GET', 'POST', 'PUT', 'DELETE'],
-    url: '/api/mexc/*',
-    handler: async (req, reply) => {
-      const suffix = req.params['*'] || '';
-      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-      const upstream = buildUpstreamUrl('https://api.mexc.com/', suffix, search);
-      return forwardRequest(upstream, req, reply, MEXC_ALLOWED_HEADERS);
-    }
-  });
-
-  // MEXC futures API (contract)
-  app.options('/api/mexc-contract/*', async (req, reply) => {
-    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
-    return reply.send();
-  });
-  app.route({
-    method: ['GET', 'POST', 'PUT', 'DELETE'],
-    url: '/api/mexc-contract/*',
-    handler: async (req, reply) => {
-      const suffix = req.params['*'] || '';
-      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
-      const upstream = buildUpstreamUrl('https://contract.mexc.com/', suffix, search);
-      return forwardRequest(upstream, req, reply, MEXC_ALLOWED_HEADERS);
-    }
+// Start background polling for Polymarket tags
+const startPolymarketPolling = () => {
+  console.log('[Polymarket] Starting background polling for all tags...');
+  
+  POLYMARKET_TAGS_TO_POLL.forEach(tag => {
+    // Poll every 5 minutes with concurrency guard
+    const pollInterval = setInterval(async () => {
+      // Skip if poll already in progress for this tag
+      if (pollingInProgress.get(tag.id)) {
+        console.warn(`[Polymarket] Poll already in progress for ${tag.label}, skipping...`);
+        return;
+      }
+      
+      pollingInProgress.set(tag.id, true);
+      const url = `https://gamma-api.polymarket.com/events?closed=false&tag_id=${tag.id}&volume_num_min=1000&limit=250&order=createdAt&ascending=false`;
+      
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { 'User-Agent': 'clterminal-chats' },
+          agent: httpsAgent
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          const stripped = stripPolymarketResponse(data);
+          const strippedJson = JSON.stringify(stripped);
+          const bodyBuf = Buffer.from(strippedJson, 'utf8');
+          
+          // Cache the result
+          const cacheKey = `polymarket-${tag.id}`;
+          polymarketCache.set(cacheKey, {
+            status: 200,
+            contentType: 'application/json',
+            body: bodyBuf,
+            ts: Date.now()
+          });
+          
+          console.log(`[Polymarket] ✅ Polled ${tag.label} (tag ${tag.id}): ${data.length} markets`);
+        } else {
+          console.warn(`[Polymarket] Poll failed for ${tag.label}: ${res.status}`);
+        }
+      } catch (err) {
+        console.error(`[Polymarket] Poll error for ${tag.label}:`, err.message);
+      } finally {
+        pollingInProgress.set(tag.id, false);
+      }
+    }, 300000); // 5 minutes
+    
+    polymarketPollingIntervals.set(tag.id, pollInterval);
   });
 };
 
+// Stop polling (for graceful shutdown)
+const stopPolymarketPolling = () => {
+  console.log('[Polymarket] Stopping background polling...');
+  polymarketPollingIntervals.forEach((intervalId) => clearInterval(intervalId));
+  polymarketPollingIntervals.clear();
+};
 

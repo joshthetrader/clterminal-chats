@@ -28,33 +28,22 @@ function broadcastPresence(room) {
 module.exports = function(app) {
   // Main chat WebSocket
   app.register(async function (fastify) {
-    // Log all WebSocket connection attempts with details
-    fastify.addHook('preHandler', async (request, reply) => {
-      if (request.url === '/ws' || request.url === '/ws-news' || request.url === '/ws-volatility') {
-        const details = {
-          timestamp: new Date().toISOString(),
-          method: request.method,
-          path: request.url,
-          ip: request.ip,
-          host: request.hostname,
-          userAgent: request.headers['user-agent']?.substring(0, 80),
-          protocol: request.protocol,
-          remoteAddress: request.socket.remoteAddress,
-          remotePort: request.socket.remotePort
-        };
-        console.log(`🔌 [WS-REQUEST] ${JSON.stringify(details)}`);
-      }
-    });
-
     fastify.get('/ws', { websocket: true }, (connection, req) => {
+      const connectionId = Math.random().toString(36).slice(2);
+      const clientIp = req.ip || 'unknown';
+      const startTime = Date.now();
+      
       try {
         const ws = connection.socket;
+        if (!ws) {
+          console.error(`❌ [WS ${connectionId}] Invalid socket connection`);
+          try { connection.socket?.close(1011, 'Invalid connection'); } catch (_) {}
+          return;
+        }
+        
         let user = { name: 'Anon', color: '#aaa' };
         let clientId = null;
         const room = 'global';
-        const connectionId = Math.random().toString(36).slice(2);
-        const clientIp = req.ip || 'unknown';
-        const startTime = Date.now();
 
         console.log(`✅ [WS ${connectionId}] Connection established - IP: ${clientIp}, Host: ${req.hostname}, UserAgent: ${req.headers['user-agent']?.substring(0, 60)}`);
 
