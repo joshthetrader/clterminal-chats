@@ -197,6 +197,60 @@ module.exports = function(app) {
               ws.send(JSON.stringify({ type: 'error', message: 'Failed to share trade' }));
             }
           }
+
+          if (msg.type === 'layoutShare') {
+            try {
+              const id = nanoid();
+              const layoutName = String(msg.layoutName || 'Layout').slice(0, 30);
+              const windowCount = parseInt(msg.windowCount) || 0;
+              const windows = Array.isArray(msg.windows) ? msg.windows : [];
+              
+              const payload = {
+                type: 'message',
+                id,
+                room,
+                user: { name: user.name, color: user.color },
+                ts: Date.now(),
+                layoutShare: true,
+                layout: {
+                  layoutName,
+                  windowCount,
+                  windows
+                },
+                clientId: msg.clientId ? String(msg.clientId).slice(0, 40) : undefined
+              };
+              
+              const layoutDetails = {
+                name: layoutName,
+                windowCount,
+                user: user.name,
+                clientId: payload.clientId
+              };
+              console.log(`📐 [WS ${connectionId}] Layout share - ${JSON.stringify(layoutDetails)}`);
+              
+              broadcast(room, payload);
+              
+              await storage.persistMessage({
+                id,
+                room,
+                user_name: user.name,
+                user_color: user.color,
+                is_layout: true,
+                layout_name: layoutName,
+                layout_window_count: windowCount,
+                layout_windows: JSON.stringify(windows),
+                client_id: payload.clientId
+              }).catch(e => {
+                const errDetails = { layoutName, error: e.message };
+                console.error(`❌ [WS ${connectionId}] Layout persist failed - ${JSON.stringify(errDetails)}`);
+              });
+              return;
+            } catch (e) {
+              const errDetails = { error: e.message, type: 'layoutShare', user: user.name };
+              console.error(`❌ [WS ${connectionId}] Error - ${JSON.stringify(errDetails)}`);
+              ws.send(JSON.stringify({ type: 'error', message: 'Failed to share layout' }));
+            }
+          }
         } catch (e) {
           console.error(`[WS ${connectionId}] Unexpected error in message handler:`, e.message);
         }

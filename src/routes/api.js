@@ -71,7 +71,8 @@ module.exports = function(app) {
     try {
       if (storage.pgClient) {
         const result = await storage.pgClient.query(
-          `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, reply_to, 
+          `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, 
+                  is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id,
                   EXTRACT(EPOCH FROM created_at) * 1000 as ts
            FROM chat_messages 
            WHERE room = $1 
@@ -94,7 +95,14 @@ module.exports = function(app) {
             lev: row.trade_lev,
             entry: row.trade_entry
           } : undefined,
-          replyTo: row.reply_to
+          layoutShare: row.is_layout,
+          layout: row.is_layout ? {
+            layoutName: row.layout_name,
+            windowCount: row.layout_window_count,
+            windows: row.layout_windows ? (typeof row.layout_windows === 'string' ? JSON.parse(row.layout_windows) : row.layout_windows) : []
+          } : undefined,
+          replyTo: row.reply_to,
+          clientId: row.client_id
         }));
         
         return { messages };
@@ -115,6 +123,12 @@ module.exports = function(app) {
               side: m.trade_side,
               lev: m.trade_lev,
               entry: m.trade_entry
+            } : undefined,
+            layoutShare: m.is_layout,
+            layout: m.is_layout ? {
+              layoutName: m.layout_name,
+              windowCount: m.layout_window_count,
+              windows: m.layout_windows ? JSON.parse(m.layout_windows) : []
             } : undefined,
             replyTo: m.reply_to,
             clientId: m.client_id

@@ -19,8 +19,6 @@ const polymarketPollingIntervals = new Map(); // tagId -> intervalId
 // Polymarket tag IDs to poll
 const POLYMARKET_TAGS_TO_POLL = [
   { id: 21, label: 'crypto' },
-  { id: 2, label: 'politics' },
-  { id: 107, label: 'finance' },
   { id: 100328, label: 'economy' }
 ];
 
@@ -331,7 +329,7 @@ module.exports = function (app) {
       // 1) Cache HIT
       const cached = polymarketCache.get(cacheKey);
       if (cached && Date.now() - cached.ts < POLYMARKET_CACHE_TTL) {
-        console.log(`✅ [Polymarket] Cache HIT for ${suffix}`);
+        // Removed spam log: console.log(`✅ [Polymarket] Cache HIT for ${suffix}`);
         reply.code(cached.status);
         reply.header('content-type', cached.contentType);
         reply.header('Access-Control-Allow-Origin', origin);
@@ -341,7 +339,7 @@ module.exports = function (app) {
 
       // 2) In-flight request (dedup)
       if (pendingPolymarketFetches.has(cacheKey)) {
-        console.log(`⏳ [Polymarket] Dedup - Waiting for in-flight request: ${suffix}`);
+        // Removed spam log: console.log(`⏳ [Polymarket] Dedup - Waiting for in-flight request: ${suffix}`);
         const pendingResult = await pendingPolymarketFetches.get(cacheKey);
         reply.code(pendingResult.status);
         reply.header('content-type', pendingResult.contentType);
@@ -416,7 +414,7 @@ module.exports = function (app) {
       try {
         const result = await execPromise;
         const totalTime = Date.now() - startTime;
-        console.log(`⏱️  [Polymarket] Request completed in ${totalTime}ms`);
+        // Removed spam log: console.log(`⏱️  [Polymarket] Request completed in ${totalTime}ms`);
 
         reply.code(result.status);
         reply.header('content-type', result.contentType);
@@ -446,7 +444,8 @@ const startPolymarketPolling = () => {
       }
       
       pollingInProgress.set(tag.id, true);
-      const url = `https://gamma-api.polymarket.com/events?closed=false&tag_id=${tag.id}&volume_num_min=1000&limit=250&order=createdAt&ascending=false`;
+      // Fetch top 250 by volume (sorted descending to get highest volume markets first)
+      const url = `https://gamma-api.polymarket.com/events?closed=false&tag_id=${tag.id}&limit=250&order=volume&ascending=false`;
       
       try {
         const res = await fetch(url, {
@@ -470,7 +469,7 @@ const startPolymarketPolling = () => {
             ts: Date.now()
           });
           
-          console.log(`[Polymarket] ✅ Polled ${tag.label} (tag ${tag.id}): ${data.length} markets`);
+          // Removed spam log: console.log(`[Polymarket] ✅ Polled ${tag.label} (tag ${tag.id}): ${data.length} markets`);
         } else {
           console.warn(`[Polymarket] Poll failed for ${tag.label}: ${res.status}`);
         }
