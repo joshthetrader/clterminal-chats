@@ -71,7 +71,7 @@ module.exports = function(app) {
     try {
       if (storage.pgClient) {
         const result = await storage.pgClient.query(
-          `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, 
+          `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss,
                   is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id,
                   EXTRACT(EPOCH FROM created_at) * 1000 as ts
            FROM chat_messages 
@@ -93,7 +93,9 @@ module.exports = function(app) {
             sym: row.trade_sym,
             side: row.trade_side,
             lev: row.trade_lev,
-            entry: row.trade_entry
+            entry: row.trade_entry,
+            takeProfit: row.trade_take_profit || undefined,
+            stopLoss: row.trade_stop_loss || undefined
           } : undefined,
           layoutShare: row.is_layout,
           layout: row.is_layout ? {
@@ -122,7 +124,9 @@ module.exports = function(app) {
               sym: m.trade_sym,
               side: m.trade_side,
               lev: m.trade_lev,
-              entry: m.trade_entry
+              entry: m.trade_entry,
+              takeProfit: m.trade_take_profit || undefined,
+              stopLoss: m.trade_stop_loss || undefined
             } : undefined,
             layoutShare: m.is_layout,
             layout: m.is_layout ? {

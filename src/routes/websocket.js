@@ -146,6 +146,8 @@ module.exports = function(app) {
               const side = /long/i.test(msg.side) ? 'Long' : 'Short';
               const lev = String(msg.lev || '').slice(0, 6);
               const entry = String(msg.entry || '').slice(0, 32);
+              const takeProfit = msg.takeProfit ? String(msg.takeProfit).slice(0, 32) : undefined;
+              const stopLoss = msg.stopLoss ? String(msg.stopLoss).slice(0, 32) : undefined;
               
               const payload = {
                 type: 'message',
@@ -158,7 +160,9 @@ module.exports = function(app) {
                   sym,
                   side,
                   lev,
-                  entry
+                  entry,
+                  takeProfit,
+                  stopLoss
                 },
                 clientId: msg.clientId ? String(msg.clientId).slice(0, 40) : undefined
               };
@@ -168,6 +172,8 @@ module.exports = function(app) {
                 side,
                 leverage: lev,
                 entry,
+                takeProfit,
+                stopLoss,
                 user: user.name,
                 clientId: payload.clientId
               };
@@ -185,6 +191,8 @@ module.exports = function(app) {
                 trade_side: side,
                 trade_lev: lev,
                 trade_entry: entry,
+                trade_take_profit: takeProfit || null,
+                trade_stop_loss: stopLoss || null,
                 client_id: payload.clientId
               }).catch(e => {
                 const errDetails = { symbol: sym, side, error: e.message };
@@ -354,7 +362,7 @@ module.exports = function(app) {
             let alerts = [];
             if (storage.pgClient) {
               const result = await storage.pgClient.query(
-                `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, EXTRACT(EPOCH FROM created_at) * 1000 as ts
+                `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, COALESCE(time_period, 30) as time_period, EXTRACT(EPOCH FROM created_at) * 1000 as ts
                  FROM volatility_alerts
                  ORDER BY created_at DESC
                  LIMIT 10`
@@ -367,10 +375,14 @@ module.exports = function(app) {
                 changePercent: Number(row.change_percent),
                 volume: Number(row.volume),
                 type: row.alert_type,
+                timePeriod: Number(row.time_period) || 30,
                 timestamp: Number(row.ts)
               }));
             } else {
-              alerts = storage.memoryVolatilityAlerts.slice(-10);
+              alerts = storage.memoryVolatilityAlerts.slice(-10).map(alert => ({
+                ...alert,
+                timePeriod: alert.timePeriod || alert.time_period || 30
+              }));
             }
             
             ws.send(JSON.stringify({ type: 'history', alerts }));
