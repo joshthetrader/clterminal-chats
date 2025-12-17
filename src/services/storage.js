@@ -137,6 +137,17 @@ async function initPostgres() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS volatility_alerts_created_at ON volatility_alerts(created_at DESC);
+    
+    -- Migration: Add time_period column if it doesn't exist (for existing tables)
+    DO $$ 
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'volatility_alerts' AND column_name = 'time_period'
+      ) THEN
+        ALTER TABLE volatility_alerts ADD COLUMN time_period INTEGER DEFAULT 30;
+      END IF;
+    END $$;
 
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY,

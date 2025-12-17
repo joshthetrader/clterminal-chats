@@ -237,6 +237,29 @@ function connectExternalSources(pgClient, memoryNews) {
   sources.forEach(connect);
 }
 
+// Helper function to parse time period from various formats
+function parseTimePeriod(value) {
+  if (typeof value === 'number') {
+    return value; // Assume it's already in seconds
+  }
+  if (typeof value === 'string') {
+    // Parse strings like "30s", "1m", "5m", "1h", etc.
+    const match = value.match(/^(\d+)([smh])?$/i);
+    if (match) {
+      const num = parseInt(match[1]);
+      const unit = (match[2] || 's').toLowerCase();
+      if (unit === 's') return num;
+      if (unit === 'm') return num * 60;
+      if (unit === 'h') return num * 3600;
+      return num; // Default to seconds
+    }
+    // Try to parse as number
+    const parsed = parseInt(value);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 30; // Default to 30 seconds
+}
+
 // Connect to BWE for volatility alerts
 function connectBWE(pgClient, memoryVolatilityAlerts) {
   try {
@@ -297,6 +320,31 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
             continue;
           }
 
+          // Extract time period from various possible fields
+          // Try: timeframe, period, duration, interval, time_period, or parse from title
+          let timePeriod = 30; // Default to 30 seconds
+          if (item.timeframe !== undefined) {
+            timePeriod = parseTimePeriod(item.timeframe);
+          } else if (item.period !== undefined) {
+            timePeriod = parseTimePeriod(item.period);
+          } else if (item.duration !== undefined) {
+            timePeriod = parseTimePeriod(item.duration);
+          } else if (item.interval !== undefined) {
+            timePeriod = parseTimePeriod(item.interval);
+          } else if (item.time_period !== undefined) {
+            timePeriod = parseTimePeriod(item.time_period);
+          } else if (item.title) {
+            // Try to parse from title like "in 30s", "in 1m", "in 5m", etc.
+            const timeMatch = item.title.match(/in\s+(\d+)([smh])/i);
+            if (timeMatch) {
+              const value = parseInt(timeMatch[1]);
+              const unit = timeMatch[2].toLowerCase();
+              if (unit === 's') timePeriod = value;
+              else if (unit === 'm') timePeriod = value * 60;
+              else if (unit === 'h') timePeriod = value * 3600;
+            }
+          }
+
           const alert = {
             id: nanoid(),
             symbol: String(symbol).toUpperCase(),
@@ -305,7 +353,8 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
             changePercent: changePercent || Number(item.changePercent || item.change_percent || item.change || item.percent_change || 0),
             volume: Number(item.volume || item.volume_24h || 0),
             type: item.type || item.alert_type || 'VOLATILITY',
-            timestamp: item.time || item.timestamp || Date.now()
+            timestamp: item.time || item.timestamp || Date.now(),
+            timePeriod: timePeriod
           };
 
           console.log('[BWE] New alert:', alert.symbol, (alert.changePercent > 0 ? '+' : '') + alert.changePercent + '%');
@@ -343,7 +392,8 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
     change_percent: Number(alert.changePercent) || 0,
     volume: Number(alert.volume) || 0,
     alert_type: String(alert.type || 'VOLATILITY').slice(0, 20),
-    timestamp: alert.timestamp || Date.now()
+    timestamp: alert.timestamp || Date.now(),
+    time_period: Number(alert.timePeriod) || 30 // Time period in seconds, default to 30
   };
 
   memoryVolatilityAlerts.push(alertData);
@@ -354,8 +404,8 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
   if (pgClient) {
     try {
       pgClient.query(
-        `INSERT INTO volatility_alerts (id, symbol, exchange, price, change_percent, volume, alert_type, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO volatility_alerts (id, symbol, exchange, price, change_percent, volume, alert_type, time_period, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
         [
           alertData.id,
           alertData.symbol,
@@ -364,6 +414,7 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
           alertData.change_percent,
           alertData.volume,
           alertData.alert_type,
+          alertData.time_period,
           new Date(alertData.timestamp).toISOString()
         ]
       );
@@ -380,7 +431,8 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
     changePercent: alertData.change_percent,
     volume: alertData.volume,
     type: alertData.alert_type,
-    timestamp: alertData.timestamp
+    timestamp: alertData.timestamp,
+    timePeriod: alertData.time_period
   });
 }
 

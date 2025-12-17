@@ -361,12 +361,25 @@ module.exports = function(app) {
             console.log(`[Volatility WS ${connectionId}] Sending last 10 alerts`);
             let alerts = [];
             if (storage.pgClient) {
-              const result = await storage.pgClient.query(
-                `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, COALESCE(time_period, 30) as time_period, EXTRACT(EPOCH FROM created_at) * 1000 as ts
-                 FROM volatility_alerts
-                 ORDER BY created_at DESC
-                 LIMIT 10`
-              );
+              // Check if time_period column exists, then query accordingly
+              const columnCheck = await storage.pgClient.query(`
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'volatility_alerts' AND column_name = 'time_period'
+              `);
+              const hasTimePeriod = columnCheck.rows.length > 0;
+              
+              const query = hasTimePeriod
+                ? `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, COALESCE(time_period, 30) as time_period, EXTRACT(EPOCH FROM created_at) * 1000 as ts
+                   FROM volatility_alerts
+                   ORDER BY created_at DESC
+                   LIMIT 10`
+                : `SELECT id, symbol, exchange, price, change_percent, volume, alert_type, 30 as time_period, EXTRACT(EPOCH FROM created_at) * 1000 as ts
+                   FROM volatility_alerts
+                   ORDER BY created_at DESC
+                   LIMIT 10`;
+              
+              const result = await storage.pgClient.query(query);
               alerts = result.rows.reverse().map(row => ({
                 id: row.id,
                 symbol: row.symbol,
