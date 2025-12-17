@@ -175,6 +175,16 @@ async function initPostgres() {
   await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS trade_stop_loss TEXT`);
   await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS coin TEXT`);
   await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS symbols JSONB`);
+  // Order sharing columns
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS is_order BOOLEAN DEFAULT FALSE`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_sym TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_side TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_lev TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_price TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_qty TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_type TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_take_profit TEXT`);
+  await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_stop_loss TEXT`);
 }
 
 // Persist chat message
@@ -183,15 +193,16 @@ async function persistMessage(msg) {
     id, room, user_name, user_color, text,
     is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss,
     is_layout, layout_name, layout_window_count, layout_windows,
+    is_order, order_sym, order_side, order_lev, order_price, order_qty, order_type, order_take_profit, order_stop_loss,
     reply_to, client_id
   } = msg;
   
   if (pgClient) {
     try {
       await pgClient.query(
-        `INSERT INTO chat_messages (id, room, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss, is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (id) DO NOTHING`,
-        [id, room, user_name, user_color, text || null, !!is_trade, trade_sym || null, trade_side || null, trade_lev || null, trade_entry || null, trade_take_profit || null, trade_stop_loss || null, !!is_layout, layout_name || null, layout_window_count || null, layout_windows || null, reply_to || null, client_id || null]
+        `INSERT INTO chat_messages (id, room, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss, is_layout, layout_name, layout_window_count, layout_windows, is_order, order_sym, order_side, order_lev, order_price, order_qty, order_type, order_take_profit, order_stop_loss, reply_to, client_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) ON CONFLICT (id) DO NOTHING`,
+        [id, room, user_name, user_color, text || null, !!is_trade, trade_sym || null, trade_side || null, trade_lev || null, trade_entry || null, trade_take_profit || null, trade_stop_loss || null, !!is_layout, layout_name || null, layout_window_count || null, layout_windows || null, !!is_order, order_sym || null, order_side || null, order_lev || null, order_price || null, order_qty || null, order_type || null, order_take_profit || null, order_stop_loss || null, reply_to || null, client_id || null]
       );
     } catch (e) {
       console.error('[Storage] persistMessage error:', e.message);
@@ -203,8 +214,11 @@ async function persistMessage(msg) {
       trade_lev: trade_lev || null, trade_entry: trade_entry || null,
       trade_take_profit: trade_take_profit || null, trade_stop_loss: trade_stop_loss || null,
       is_layout: !!is_layout, layout_name: layout_name || null, layout_window_count: layout_window_count || null,
-      layout_windows: layout_windows || null, reply_to: reply_to || null,
-      client_id: client_id || null, ts: Date.now()
+      layout_windows: layout_windows || null,
+      is_order: !!is_order, order_sym: order_sym || null, order_side: order_side || null,
+      order_lev: order_lev || null, order_price: order_price || null, order_qty: order_qty || null,
+      order_type: order_type || null, order_take_profit: order_take_profit || null, order_stop_loss: order_stop_loss || null,
+      reply_to: reply_to || null, client_id: client_id || null, ts: Date.now()
     };
     
     memoryMessages.push(memMsg);

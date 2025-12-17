@@ -206,6 +206,81 @@ module.exports = function(app) {
             }
           }
 
+          if (msg.type === 'orderShare') {
+            try {
+              const id = nanoid();
+              const sym = String(msg.sym || '').toUpperCase().slice(0, 20);
+              const side = /long/i.test(msg.side) ? 'Long' : 'Short';
+              const lev = String(msg.lev || '').slice(0, 6);
+              const price = String(msg.price || '').slice(0, 32);
+              const qty = String(msg.qty || '').slice(0, 32);
+              const orderType = String(msg.orderType || 'Limit').slice(0, 20);
+              const takeProfit = msg.takeProfit ? String(msg.takeProfit).slice(0, 32) : undefined;
+              const stopLoss = msg.stopLoss ? String(msg.stopLoss).slice(0, 32) : undefined;
+              
+              const payload = {
+                type: 'message',
+                id,
+                room,
+                user: { name: user.name, color: user.color },
+                ts: Date.now(),
+                orderShare: true,
+                order: {
+                  sym,
+                  side,
+                  lev,
+                  price,
+                  qty,
+                  orderType,
+                  takeProfit,
+                  stopLoss
+                },
+                clientId: msg.clientId ? String(msg.clientId).slice(0, 40) : undefined
+              };
+              
+              const orderDetails = {
+                symbol: sym,
+                side,
+                leverage: lev,
+                price,
+                qty,
+                orderType,
+                takeProfit,
+                stopLoss,
+                user: user.name,
+                clientId: payload.clientId
+              };
+              console.log(`📋 [WS ${connectionId}] Order share - ${JSON.stringify(orderDetails)}`);
+              
+              broadcast(room, payload);
+              
+              await storage.persistMessage({
+                id,
+                room,
+                user_name: user.name,
+                user_color: user.color,
+                is_order: true,
+                order_sym: sym,
+                order_side: side,
+                order_lev: lev,
+                order_price: price,
+                order_qty: qty,
+                order_type: orderType,
+                order_take_profit: takeProfit || null,
+                order_stop_loss: stopLoss || null,
+                client_id: payload.clientId
+              }).catch(e => {
+                const errDetails = { symbol: sym, side, error: e.message };
+                console.error(`❌ [WS ${connectionId}] Order persist failed - ${JSON.stringify(errDetails)}`);
+              });
+              return;
+            } catch (e) {
+              const errDetails = { error: e.message, type: 'orderShare', user: user.name };
+              console.error(`❌ [WS ${connectionId}] Error - ${JSON.stringify(errDetails)}`);
+              ws.send(JSON.stringify({ type: 'error', message: 'Failed to share order' }));
+            }
+          }
+
           if (msg.type === 'layoutShare') {
             try {
               const id = nanoid();
