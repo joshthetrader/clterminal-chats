@@ -334,14 +334,25 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
           } else if (item.time_period !== undefined) {
             timePeriod = parseTimePeriod(item.time_period);
           } else if (item.title) {
-            // Try to parse from title like "in 30s", "in 1m", "in 5m", etc.
-            const timeMatch = item.title.match(/in\s+(\d+)([smh])/i);
-            if (timeMatch) {
-              const value = parseInt(timeMatch[1]);
-              const unit = timeMatch[2].toLowerCase();
-              if (unit === 's') timePeriod = value;
-              else if (unit === 'm') timePeriod = value * 60;
-              else if (unit === 'h') timePeriod = value * 3600;
+            // Try to parse from title like "in the past 3 seconds", "in 30s", "in 1m", etc.
+            // First try: "in the past X seconds/minutes/hours" format
+            const longMatch = item.title.match(/(?:in\s+the\s+past|past)\s+(\d+)\s*(second|minute|hour|sec|min)s?/i);
+            if (longMatch) {
+              const value = parseInt(longMatch[1]);
+              const unit = longMatch[2].toLowerCase();
+              if (unit === 'second' || unit === 'sec') timePeriod = value;
+              else if (unit === 'minute' || unit === 'min') timePeriod = value * 60;
+              else if (unit === 'hour') timePeriod = value * 3600;
+            } else {
+              // Fallback: short form like "in 30s", "in 1m", "in 5m"
+              const shortMatch = item.title.match(/in\s+(\d+)([smh])/i);
+              if (shortMatch) {
+                const value = parseInt(shortMatch[1]);
+                const unit = shortMatch[2].toLowerCase();
+                if (unit === 's') timePeriod = value;
+                else if (unit === 'm') timePeriod = value * 60;
+                else if (unit === 'h') timePeriod = value * 3600;
+              }
             }
           }
 
@@ -357,7 +368,7 @@ function connectBWE(pgClient, memoryVolatilityAlerts) {
             timePeriod: timePeriod
           };
 
-          console.log('[BWE] New alert:', alert.symbol, (alert.changePercent > 0 ? '+' : '') + alert.changePercent + '%');
+          console.log('[BWE] New alert:', alert.symbol, (alert.changePercent > 0 ? '+' : '') + alert.changePercent + '%', 'in', alert.timePeriod + 's');
           pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts);
         }
       } catch (e) {
