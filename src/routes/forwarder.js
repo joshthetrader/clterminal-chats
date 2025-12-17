@@ -5,6 +5,7 @@ const http = require('http');
 const { URL } = require('url');
 const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
+const storage = require('../services/storage');
 
 const TICKER_CACHE_TTL = 300000; // 5m shared cache
 const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
@@ -139,7 +140,47 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const totalTime = Date.now() - startTime;
     
     if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
-      console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+      // console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
+      
+      // Track trade event
+      try {
+        let exchange = 'unknown';
+        if (parsedUrl.hostname.includes('blofin')) exchange = 'blofin';
+        else if (parsedUrl.hostname.includes('bitunix')) exchange = 'bitunix';
+        else if (parsedUrl.hostname.includes('bybit')) exchange = 'bybit';
+        
+        let event = 'unknown';
+        const path = parsedUrl.pathname.toLowerCase();
+        if (path.includes('cancel')) event = 'cancel order';
+        else if (path.includes('order')) event = 'open order'; // Could be open/close position
+        
+        // Try to refine event from body if available
+        let payload = null;
+        if (body) {
+          try {
+            payload = JSON.parse(body);
+            if (payload.reduceOnly || payload.closeOnTrigger) {
+              event = 'close position (order)';
+            } else if (payload.side && payload.symbol) {
+              event = 'open position (order)';
+            }
+          } catch (_) {
+            payload = body;
+          }
+        }
+        
+        // Only track if we identified a relevant trade action
+        if (exchange !== 'unknown') {
+          storage.persistTradeEvent(exchange, event, {
+            path: parsedUrl.pathname,
+            status: res.status,
+            request: payload,
+            responseStatus: res.status
+          });
+        }
+      } catch (err) {
+        console.error('[FORWARDER] Failed to track trade event:', err);
+      }
     }
 
       const bodyBuf = Buffer.from(await res.arrayBuffer());

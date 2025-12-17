@@ -149,43 +149,20 @@ async function initPostgres() {
       END IF;
     END $$;
 
-    CREATE TABLE IF NOT EXISTS orders (
-      id TEXT PRIMARY KEY,
-      client_order_id TEXT,
-      exchange TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      side TEXT,
-      type TEXT,
-      price NUMERIC,
-      qty NUMERIC,
-      status TEXT,
-      client_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_orders_client ON orders(client_id, created_at DESC);
+    -- Drop unused tables if they exist
+    DROP TABLE IF EXISTS fills CASCADE;
+    DROP TABLE IF EXISTS order_events CASCADE;
+    DROP TABLE IF EXISTS orders CASCADE;
 
-    CREATE TABLE IF NOT EXISTS fills (
-      id TEXT PRIMARY KEY,
-      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    -- Create new trade_events table
+    CREATE TABLE IF NOT EXISTS trade_events (
+      id SERIAL PRIMARY KEY,
       exchange TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      price NUMERIC NOT NULL,
-      qty NUMERIC NOT NULL,
-      fee NUMERIC,
-      liquidity TEXT,
-      ts TIMESTAMPTZ NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_fills_order ON fills(order_id, ts DESC);
-
-    CREATE TABLE IF NOT EXISTS order_events (
-      id TEXT PRIMARY KEY,
-      order_id TEXT REFERENCES orders(id) ON DELETE CASCADE,
-      exchange TEXT NOT NULL,
-      type TEXT NOT NULL,
+      event TEXT NOT NULL,
       payload JSONB,
       ts TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE INDEX IF NOT EXISTS idx_trade_events_ts ON trade_events(ts DESC);
   `);
   
   // Online migrations
@@ -238,6 +215,20 @@ async function persistMessage(msg) {
   }
 }
 
+// Persist trade event
+async function persistTradeEvent(exchange, event, payload) {
+  if (pgClient) {
+    try {
+      await pgClient.query(
+        `INSERT INTO trade_events (exchange, event, payload) VALUES ($1, $2, $3)`,
+        [exchange, event, typeof payload === 'string' ? payload : JSON.stringify(payload)]
+      );
+    } catch (e) {
+      console.error('[Storage] persistTradeEvent error:', e.message);
+    }
+  }
+}
+
 module.exports = {
   get pgClient() { return pgClient; },
   get memoryMessages() { return memoryMessages; },
@@ -253,6 +244,7 @@ module.exports = {
   saveNews,
   initPostgres,
   persistMessage,
+  persistTradeEvent,
   
   getFileLocation: () => ({ MESSAGES_FILE, NEWS_FILE })
 };
