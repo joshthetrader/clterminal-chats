@@ -72,6 +72,7 @@ module.exports = function(app) {
       if (storage.pgClient) {
         const result = await storage.pgClient.query(
           `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss,
+                  is_order, order_sym, order_side, order_lev, order_price, order_qty, order_type, order_take_profit, order_stop_loss,
                   is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id,
                   EXTRACT(EPOCH FROM created_at) * 1000 as ts
            FROM chat_messages 
@@ -96,6 +97,17 @@ module.exports = function(app) {
             entry: row.trade_entry,
             takeProfit: row.trade_take_profit || undefined,
             stopLoss: row.trade_stop_loss || undefined
+          } : undefined,
+          orderShare: row.is_order,
+          order: row.is_order ? {
+            sym: row.order_sym,
+            side: row.order_side,
+            lev: row.order_lev,
+            price: row.order_price,
+            qty: row.order_qty,
+            orderType: row.order_type,
+            takeProfit: row.order_take_profit || undefined,
+            stopLoss: row.order_stop_loss || undefined
           } : undefined,
           layoutShare: row.is_layout,
           layout: row.is_layout ? {
@@ -127,6 +139,17 @@ module.exports = function(app) {
               entry: m.trade_entry,
               takeProfit: m.trade_take_profit || undefined,
               stopLoss: m.trade_stop_loss || undefined
+            } : undefined,
+            orderShare: m.is_order,
+            order: m.is_order ? {
+              sym: m.order_sym,
+              side: m.order_side,
+              lev: m.order_lev,
+              price: m.order_price,
+              qty: m.order_qty,
+              orderType: m.order_type,
+              takeProfit: m.order_take_profit || undefined,
+              stopLoss: m.order_stop_loss || undefined
             } : undefined,
             layoutShare: m.is_layout,
             layout: m.is_layout ? {
