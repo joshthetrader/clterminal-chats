@@ -4,6 +4,10 @@ const { nanoid } = require('nanoid');
 const { ADMIN_TOKEN, ENABLE_TRADE_EVENTS_READ } = require('../config/constants');
 const storage = require('../services/storage');
 
+// News cache to prevent repeated DB queries
+const NEWS_CACHE_TTL = 30000; // 30 seconds
+let newsCache = { data: null, ts: 0 };
+
 module.exports = function(app) {
   // Clear messages
   app.delete('/api/messages/clear', async (request, reply) => {
@@ -23,19 +27,28 @@ module.exports = function(app) {
     }
   });
 
-  // Get recent news
+  // Get recent news (with caching)
   app.get('/api/news', async (request, reply) => {
     const limit = Math.min(Number(request.query.limit) || 100, 200);
+    
+    // Check cache first
+    const now = Date.now();
+    if (newsCache.data && (now - newsCache.ts) < NEWS_CACHE_TTL) {
+      const cachedItems = newsCache.data.slice(0, limit);
+      reply.header('X-News-Cache', 'HIT');
+      return { items: cachedItems };
+    }
+    
     try {
       if (storage.pgClient) {
         const result = await storage.pgClient.query(
-          `SELECT id, source_name, source_username, text, url, followers, images, coin, symbols, is_retweet, is_quote, is_reply,
+          `SELECT id, source_name, source_username, text, url, followers, coin, symbols, is_retweet, is_quote, is_reply,
                   EXTRACT(EPOCH FROM created_at) * 1000 as created_ms,
                   EXTRACT(EPOCH FROM COALESCE(received_at, created_at)) * 1000 as received_ms
            FROM news_items
            ORDER BY created_at DESC
-           LIMIT $1`,
-          [limit]
+           LIMIT 200`,
+          []
         );
         const items = (result.rows || []).map(r => ({
           id: r.id,
@@ -44,7 +57,6 @@ module.exports = function(app) {
           text: r.text,
           url: r.url,
           followers: Number(r.followers || 0),
-          images: Array.isArray(r.images) ? r.images : (typeof r.images === 'string' ? JSON.parse(r.images) : []),
           coin: r.coin || null,
           symbols: Array.isArray(r.symbols) ? r.symbols : (typeof r.symbols === 'string' ? JSON.parse(r.symbols) : []),
           isRetweet: !!r.is_retweet,
@@ -53,7 +65,12 @@ module.exports = function(app) {
           createdAt: Number(r.created_ms) || Date.now(),
           receivedAt: Number(r.received_ms) || Number(r.created_ms) || Date.now()
         })).reverse();
-        return { items };
+        
+        // Update cache
+        newsCache = { data: items, ts: now };
+        
+        reply.header('X-News-Cache', 'MISS');
+        return { items: items.slice(0, limit) };
       }
       const items = storage.memoryNews.slice(-limit).reverse();
       return { items };
