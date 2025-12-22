@@ -8,6 +8,18 @@ const storage = require('../services/storage');
 const NEWS_CACHE_TTL = 30000; // 30 seconds
 let newsCache = { data: null, ts: 0 };
 
+// Rate limiting per IP for /api/news (protects against buggy cached clients)
+const NEWS_RATE_LIMIT_MS = 5000; // Max 1 request per 5 seconds per IP
+const newsRateLimitMap = new Map(); // IP -> last request timestamp
+
+// Cleanup old rate limit entries every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, ts] of newsRateLimitMap.entries()) {
+    if (now - ts > 60000) newsRateLimitMap.delete(ip);
+  }
+}, 60000);
+
 module.exports = function(app) {
   // Clear messages
   app.delete('/api/messages/clear', async (request, reply) => {
@@ -27,12 +39,30 @@ module.exports = function(app) {
     }
   });
 
-  // Get recent news (with caching)
+  // Get recent news (with caching + rate limiting)
   app.get('/api/news', async (request, reply) => {
+    // Get client IP (Railway uses x-forwarded-for)
+    const clientIp = request.headers['x-forwarded-for']?.split(',')[0]?.trim() 
+                  || request.headers['x-real-ip'] 
+                  || request.ip 
+                  || 'unknown';
+    const now = Date.now();
+    
+    // Rate limit check - 1 request per 5 seconds per IP
+    const lastRequest = newsRateLimitMap.get(clientIp) || 0;
+    if (now - lastRequest < NEWS_RATE_LIMIT_MS) {
+      const retryAfter = Math.ceil((NEWS_RATE_LIMIT_MS - (now - lastRequest)) / 1000);
+      console.warn(`⚠️ [Rate Limit] /api/news blocked for IP ${clientIp} - retry in ${retryAfter}s`);
+      reply.code(429);
+      reply.header('Retry-After', retryAfter);
+      reply.header('X-RateLimit-Reset', new Date(lastRequest + NEWS_RATE_LIMIT_MS).toISOString());
+      return { error: 'Too many requests', retryAfter };
+    }
+    newsRateLimitMap.set(clientIp, now);
+    
     const limit = Math.min(Number(request.query.limit) || 100, 200);
     
     // Check cache first
-    const now = Date.now();
     if (newsCache.data && (now - newsCache.ts) < NEWS_CACHE_TTL) {
       const cachedItems = newsCache.data.slice(0, limit);
       reply.header('X-News-Cache', 'HIT');
