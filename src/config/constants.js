@@ -41,7 +41,8 @@ module.exports = {
     'openapi.blofin.com',
     'fapi.bitunix.com',
     'api.bitunix.com',
-    'gamma-api.polymarket.com'
+    'gamma-api.polymarket.com',
+    'api.hyperliquid.xyz'
   ]),
   
   BLOFIN_ALLOWED_HEADERS: new Set([

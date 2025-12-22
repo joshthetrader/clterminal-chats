@@ -330,6 +330,22 @@ module.exports = function (app) {
     }
   });
 
+  // Hyperliquid
+  app.options('/api/hyperliquid/*', async (req, reply) => {
+    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
+    return reply.send();
+  });
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE'],
+    url: '/api/hyperliquid/*',
+    handler: async (req, reply) => {
+      const suffix = req.params['*'] || '';
+      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://api.hyperliquid.xyz/', suffix, search);
+      return forwardRequest(upstream, req, reply, new Set(['content-type']));
+    }
+  });
+
   // Polymarket with real optimizations (DTO + cache + dedup)
   app.options('/api/polymarket/*', async (req, reply) => {
     setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
