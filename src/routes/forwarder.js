@@ -80,6 +80,29 @@ const isTickerEndpoint = (parsedUrl) => {
   return false;
 };
 
+// Hyperliquid caching logic
+const HYPERLIQUID_CACHE_TTL = 30000; // 30 seconds
+const hyperliquidCache = new Map(); // bodyHash -> { status, contentType, body, ts }
+const crypto = require('crypto');
+
+const getHyperliquidCacheKey = (url, body) => {
+  if (!body) return null;
+  const hash = crypto.createHash('md5').update(body).digest('hex');
+  return `hl:${url}:${hash}`;
+};
+
+const isHyperliquidCacheable = (url, body) => {
+  if (!url.includes('api.hyperliquid.xyz/info')) return false;
+  if (!body) return false;
+  try {
+    const parsed = JSON.parse(body);
+    // Cache candle snapshots and metadata
+    return parsed.type === 'candleSnapshot' || parsed.type === 'metaAndAssetCtxs' || parsed.type === 'allMids';
+  } catch (_) {
+    return false;
+  }
+};
+
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
   const startTime = Date.now();
   try {
@@ -119,8 +142,10 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     const parsedUrl = new URL(upstreamUrl);
     const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
 
-    const cacheable = method === 'GET' && isTickerEndpoint(parsedUrl);
-    const cacheKey = cacheable ? parsedUrl.toString() : null;
+    const cacheableTicker = method === 'GET' && isTickerEndpoint(parsedUrl);
+    const hlCacheable = method === 'POST' && isHyperliquidCacheable(upstreamUrl, body);
+    
+    const cacheKey = cacheableTicker ? parsedUrl.toString() : (hlCacheable ? getHyperliquidCacheKey(upstreamUrl, body) : null);
     const origin = req.headers.origin || '*';
 
     const performRequest = async () => {
@@ -201,12 +226,21 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
       return reply.send(Buffer.from(result.body));
     };
 
-    if (cacheable && cacheKey) {
-      const cached = tickerCache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < TICKER_CACHE_TTL) {
+    if (cacheKey) {
+      const activeCache = hlCacheable ? hyperliquidCache : tickerCache;
+      const ttl = hlCacheable ? HYPERLIQUID_CACHE_TTL : TICKER_CACHE_TTL;
+      
+      const cached = activeCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < ttl) {
         return sendResult(cached, 'HIT');
       }
 
+      // Check for pending fetches to avoid duplicate requests (thundering herd)
+      const activePending = hlCacheable ? pendingTickerFetches : pendingTickerFetches; // Use same map for now or separate? 
+      // Actually tickerCache/hyperliquidCache are separate, but pendingTickerFetches is just a map.
+      // I'll use separate pending maps for safety.
+      
+      // Wait, let's just use one pending map but key it correctly.
       if (pendingTickerFetches.has(cacheKey)) {
         const pendingResult = await pendingTickerFetches.get(cacheKey);
         if (pendingResult) {
@@ -216,7 +250,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
 
       const execPromise = performRequest().then(result => {
         if (result.ok) {
-          tickerCache.set(cacheKey, {
+          activeCache.set(cacheKey, {
             status: result.status,
             contentType: result.contentType,
             body: Buffer.from(result.body),
