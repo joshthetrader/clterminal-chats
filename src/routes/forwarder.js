@@ -3,7 +3,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
+const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, BYBIT_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 const storage = require('../services/storage');
 
@@ -77,6 +77,7 @@ const isTickerEndpoint = (parsedUrl) => {
 
   if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
   if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
+  if (hostname === 'api.bybit.com' && pathname.includes('/market/tickers')) return true;
   return false;
 };
 
@@ -279,7 +280,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
 
 // Warm up connections
 const warmupConnections = () => {
-  const hosts = ['https://openapi.blofin.com', 'https://fapi.bitunix.com'];
+  const hosts = ['https://openapi.blofin.com', 'https://fapi.bitunix.com', 'https://api.bybit.com'];
   hosts.forEach(host => {
     fetch(`${host}/`, { agent: httpsAgent }).catch(() => { });
   });
@@ -377,6 +378,38 @@ module.exports = function (app) {
       const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
       const upstream = buildUpstreamUrl('https://api.hyperliquid.xyz/', suffix, search);
       return forwardRequest(upstream, req, reply, new Set(['content-type']));
+    }
+  });
+
+  // Bybit public (for geo-blocked users)
+  app.options('/api/bybit/*', async (req, reply) => {
+    setPreflightHeaders(reply, 'Content-Type', req.headers.origin);
+    return reply.send();
+  });
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE'],
+    url: '/api/bybit/*',
+    handler: async (req, reply) => {
+      const suffix = req.params['*'] || '';
+      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://api.bybit.com/', suffix, search);
+      return forwardRequest(upstream, req, reply, new Set(['content-type']));
+    }
+  });
+
+  // Bybit private (authenticated requests for geo-blocked users)
+  app.options('/api/bybit-private/*', async (req, reply) => {
+    setPreflightHeaders(reply, 'Content-Type, X-BAPI-API-KEY, X-BAPI-SIGN, X-BAPI-TIMESTAMP, X-BAPI-RECV-WINDOW, Referer', req.headers.origin);
+    return reply.send();
+  });
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE'],
+    url: '/api/bybit-private/*',
+    handler: async (req, reply) => {
+      const suffix = req.params['*'] || '';
+      const search = req.raw.url.includes('?') ? req.raw.url.slice(req.raw.url.indexOf('?')) : '';
+      const upstream = buildUpstreamUrl('https://api.bybit.com/', suffix, search);
+      return forwardRequest(upstream, req, reply, BYBIT_ALLOWED_HEADERS);
     }
   });
 

@@ -42,7 +42,8 @@ module.exports = {
     'fapi.bitunix.com',
     'api.bitunix.com',
     'gamma-api.polymarket.com',
-    'api.hyperliquid.xyz'
+    'api.hyperliquid.xyz',
+    'api.bybit.com'
   ]),
   
   BLOFIN_ALLOWED_HEADERS: new Set([
@@ -55,6 +56,10 @@ module.exports = {
   
   POLYMARKET_ALLOWED_HEADERS: new Set([
     'content-type','accept','accept-language'
+  ]),
+  
+  BYBIT_ALLOWED_HEADERS: new Set([
+    'x-bapi-api-key','x-bapi-sign','x-bapi-timestamp','x-bapi-recv-window','content-type','referer'
   ]),
   
   // HTTP/HTTPS agents for connection pooling
