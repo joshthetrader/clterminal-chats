@@ -1,15 +1,9 @@
 // API Forwarder routes for proxying external APIs
 
-const https = require('https');
-const http = require('http');
 const { URL } = require('url');
 const { ALLOWED_UPSTREAMS, BLOFIN_ALLOWED_HEADERS, BITUNIX_ALLOWED_HEADERS, POLYMARKET_ALLOWED_HEADERS, BYBIT_ALLOWED_HEADERS, httpsAgent, httpAgent, UPSTREAM_TIMEOUT_MS } = require('../config/constants');
 const { pickHeaders, buildUpstreamUrl } = require('../middleware/validation');
 const storage = require('../services/storage');
-
-const TICKER_CACHE_TTL = 300000; // 5m shared cache
-const tickerCache = new Map(); // cacheKey -> { status, contentType, body, ts }
-const pendingTickerFetches = new Map(); // cacheKey -> Promise
 
 // Polymarket optimization cache (server-side)
 const POLYMARKET_CACHE_TTL = 300000; // 5 minutes
@@ -71,39 +65,6 @@ function setPreflightHeaders(reply, allowHeaders, origin) {
   reply.header('Access-Control-Max-Age', '600');
 }
 
-const isTickerEndpoint = (parsedUrl) => {
-  const hostname = parsedUrl.hostname;
-  const pathname = parsedUrl.pathname.toLowerCase();
-
-  if (hostname === 'openapi.blofin.com' && pathname.includes('/market/tickers')) return true;
-  if ((hostname === 'fapi.bitunix.com' || hostname === 'api.bitunix.com') && pathname.includes('/market/tickers')) return true;
-  if (hostname === 'api.bybit.com' && pathname.includes('/market/tickers')) return true;
-  return false;
-};
-
-// Hyperliquid caching logic
-const HYPERLIQUID_CACHE_TTL = 30000; // 30 seconds
-const hyperliquidCache = new Map(); // bodyHash -> { status, contentType, body, ts }
-const crypto = require('crypto');
-
-const getHyperliquidCacheKey = (url, body) => {
-  if (!body) return null;
-  const hash = crypto.createHash('md5').update(body).digest('hex');
-  return `hl:${url}:${hash}`;
-};
-
-const isHyperliquidCacheable = (url, body) => {
-  if (!url.includes('api.hyperliquid.xyz/info')) return false;
-  if (!body) return false;
-  try {
-    const parsed = JSON.parse(body);
-    // Cache candle snapshots and metadata
-    return parsed.type === 'candleSnapshot' || parsed.type === 'metaAndAssetCtxs' || parsed.type === 'allMids';
-  } catch (_) {
-    return false;
-  }
-};
-
 async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
   const startTime = Date.now();
   try {
@@ -142,15 +103,8 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     // Connection pooling agent
     const parsedUrl = new URL(upstreamUrl);
     const agent = parsedUrl.protocol === 'https:' ? httpsAgent : httpAgent;
-
-    const cacheableTicker = method === 'GET' && isTickerEndpoint(parsedUrl);
-    const hlCacheable = method === 'POST' && isHyperliquidCacheable(upstreamUrl, body);
-    
-    const cacheKey = cacheableTicker ? parsedUrl.toString() : (hlCacheable ? getHyperliquidCacheKey(upstreamUrl, body) : null);
     const origin = req.headers.origin || '*';
 
-    const performRequest = async () => {
-    const fetchStart = Date.now();
     const res = await fetch(upstreamUrl, {
       method,
       headers: sanitized,
@@ -162,12 +116,7 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
     });
     clearTimeout(t);
     
-    const fetchTime = Date.now() - fetchStart;
-    const totalTime = Date.now() - startTime;
-    
     if (method === 'POST' && (upstreamUrl.includes('/trade/') || upstreamUrl.includes('/order'))) {
-      // console.log(`⚡ [FORWARDER] ${method} ${parsedUrl.pathname} -> ${res.status} (fetch: ${fetchTime}ms, total: ${totalTime}ms)`);
-      
       // Track trade event
       try {
         let exchange = 'unknown';
@@ -178,24 +127,19 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
         let event = 'unknown';
         const path = parsedUrl.pathname.toLowerCase();
         if (path.includes('cancel')) event = 'cancel order';
-        else if (path.includes('order')) event = 'open order'; // Could be open/close position
+        else if (path.includes('order')) event = 'open order';
         
-        // Try to refine event from body if available
         let payload = null;
         if (body) {
           try {
             payload = JSON.parse(body);
-            if (payload.reduceOnly || payload.closeOnTrigger) {
-              event = 'close position (order)';
-            } else if (payload.side && payload.symbol) {
-              event = 'open position (order)';
-            }
+            if (payload.reduceOnly || payload.closeOnTrigger) event = 'close position (order)';
+            else if (payload.side && payload.symbol) event = 'open position (order)';
           } catch (_) {
             payload = body;
           }
         }
         
-        // Only track if we identified a relevant trade action
         if (exchange !== 'unknown') {
           storage.persistTradeEvent(exchange, event, {
             path: parsedUrl.pathname,
@@ -209,70 +153,18 @@ async function forwardRequest(upstreamUrl, req, reply, allowedHeaderSet) {
       }
     }
 
-      const bodyBuf = Buffer.from(await res.arrayBuffer());
-      return {
-        status: res.status,
-        ok: res.ok,
-        contentType: res.headers.get('content-type'),
-        body: bodyBuf
-      };
-    };
-
-    const sendResult = (result, cacheHeader) => {
-      reply.code(result.status);
-      if (result.contentType) reply.header('content-type', result.contentType);
+    const bodyBuf = Buffer.from(await res.arrayBuffer());
+    
+    reply.code(res.status);
+    const contentType = res.headers.get('content-type');
+    if (contentType) reply.header('content-type', contentType);
     reply.header('Access-Control-Allow-Origin', origin);
     reply.header('Access-Control-Allow-Credentials', 'true');
-      if (cacheHeader) reply.header('X-Ticker-Cache', cacheHeader);
-      return reply.send(Buffer.from(result.body));
-    };
+    return reply.send(bodyBuf);
 
-    if (cacheKey) {
-      const activeCache = hlCacheable ? hyperliquidCache : tickerCache;
-      const ttl = hlCacheable ? HYPERLIQUID_CACHE_TTL : TICKER_CACHE_TTL;
-      
-      const cached = activeCache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < ttl) {
-        return sendResult(cached, 'HIT');
-      }
-
-      // Check for pending fetches to avoid duplicate requests (thundering herd)
-      const activePending = hlCacheable ? pendingTickerFetches : pendingTickerFetches; // Use same map for now or separate? 
-      // Actually tickerCache/hyperliquidCache are separate, but pendingTickerFetches is just a map.
-      // I'll use separate pending maps for safety.
-      
-      // Wait, let's just use one pending map but key it correctly.
-      if (pendingTickerFetches.has(cacheKey)) {
-        const pendingResult = await pendingTickerFetches.get(cacheKey);
-        if (pendingResult) {
-          return sendResult(pendingResult, 'HIT');
-        }
-      }
-
-      const execPromise = performRequest().then(result => {
-        if (result.ok) {
-          activeCache.set(cacheKey, {
-            status: result.status,
-            contentType: result.contentType,
-            body: Buffer.from(result.body),
-            ts: Date.now()
-          });
-        }
-        return result;
-      }).finally(() => {
-        pendingTickerFetches.delete(cacheKey);
-      });
-      pendingTickerFetches.set(cacheKey, execPromise);
-
-      const freshResult = await execPromise;
-      return sendResult(freshResult, freshResult.ok ? 'MISS' : 'BYPASS');
-    }
-
-    const result = await performRequest();
-    return sendResult(result, null);
   } catch (e) {
     const code = e?.name === 'AbortError' ? 504 : 502;
-    console.error(`[FORWARDER] ${method} ${upstreamUrl} failed:`, e?.message || e);
+    console.error(`[FORWARDER] ${req.method} ${upstreamUrl} failed:`, e?.message || e);
     return reply.code(code).send({ error: 'Upstream error' });
   }
 }

@@ -3,6 +3,52 @@
 const { nanoid } = require('nanoid');
 const { ADMIN_TOKEN, ENABLE_TRADE_EVENTS_READ } = require('../config/constants');
 const storage = require('../services/storage');
+const { getHub } = require('../services/hub/PublicDataHub');
+
+// Helper to transform message row to API response format
+function mapMessageRow(row, room) {
+  const parseWindows = (w) => {
+    if (!w) return [];
+    return typeof w === 'string' ? JSON.parse(w) : w;
+  };
+  
+  return {
+    type: 'message',
+    id: row.id,
+    room: room || row.room,
+    user: { name: row.user_name, color: row.user_color },
+    ts: Number(row.ts) || row.ts,
+    text: row.text,
+    tradeShare: !!row.is_trade,
+    share: row.is_trade ? {
+      sym: row.trade_sym,
+      side: row.trade_side,
+      lev: row.trade_lev,
+      entry: row.trade_entry,
+      takeProfit: row.trade_take_profit || undefined,
+      stopLoss: row.trade_stop_loss || undefined
+    } : undefined,
+    orderShare: !!row.is_order,
+    order: row.is_order ? {
+      sym: row.order_sym,
+      side: row.order_side,
+      lev: row.order_lev,
+      price: row.order_price,
+      qty: row.order_qty,
+      orderType: row.order_type,
+      takeProfit: row.order_take_profit || undefined,
+      stopLoss: row.order_stop_loss || undefined
+    } : undefined,
+    layoutShare: !!row.is_layout,
+    layout: row.is_layout ? {
+      layoutName: row.layout_name,
+      windowCount: row.layout_window_count,
+      windows: parseWindows(row.layout_windows)
+    } : undefined,
+    replyTo: row.reply_to,
+    clientId: row.client_id
+  };
+}
 
 // News cache to prevent repeated DB queries
 const NEWS_CACHE_TTL = 30000; // 30 seconds
@@ -129,86 +175,14 @@ module.exports = function(app) {
           [room, limit]
         );
         
-        const messages = result.rows.reverse().map(row => ({
-          type: 'message',
-          id: row.id,
-          room,
-          user: { name: row.user_name, color: row.user_color },
-          ts: Number(row.ts),
-          text: row.text,
-          tradeShare: row.is_trade,
-          share: row.is_trade ? {
-            sym: row.trade_sym,
-            side: row.trade_side,
-            lev: row.trade_lev,
-            entry: row.trade_entry,
-            takeProfit: row.trade_take_profit || undefined,
-            stopLoss: row.trade_stop_loss || undefined
-          } : undefined,
-          orderShare: row.is_order,
-          order: row.is_order ? {
-            sym: row.order_sym,
-            side: row.order_side,
-            lev: row.order_lev,
-            price: row.order_price,
-            qty: row.order_qty,
-            orderType: row.order_type,
-            takeProfit: row.order_take_profit || undefined,
-            stopLoss: row.order_stop_loss || undefined
-          } : undefined,
-          layoutShare: row.is_layout,
-          layout: row.is_layout ? {
-            layoutName: row.layout_name,
-            windowCount: row.layout_window_count,
-            windows: row.layout_windows ? (typeof row.layout_windows === 'string' ? JSON.parse(row.layout_windows) : row.layout_windows) : []
-          } : undefined,
-          replyTo: row.reply_to,
-          clientId: row.client_id
-        }));
-        
+        const messages = result.rows.reverse().map(row => mapMessageRow(row, room));
         return { messages };
       } else {
-        const roomMessages = storage.memoryMessages
+        const messages = storage.memoryMessages
           .filter(m => m.room === room)
           .slice(-limit)
-          .map(m => ({
-            type: 'message',
-            id: m.id,
-            room: m.room,
-            user: { name: m.user_name, color: m.user_color },
-            ts: m.ts,
-            text: m.text,
-            tradeShare: m.is_trade,
-            share: m.is_trade ? {
-              sym: m.trade_sym,
-              side: m.trade_side,
-              lev: m.trade_lev,
-              entry: m.trade_entry,
-              takeProfit: m.trade_take_profit || undefined,
-              stopLoss: m.trade_stop_loss || undefined
-            } : undefined,
-            orderShare: m.is_order,
-            order: m.is_order ? {
-              sym: m.order_sym,
-              side: m.order_side,
-              lev: m.order_lev,
-              price: m.order_price,
-              qty: m.order_qty,
-              orderType: m.order_type,
-              takeProfit: m.order_take_profit || undefined,
-              stopLoss: m.order_stop_loss || undefined
-            } : undefined,
-            layoutShare: m.is_layout,
-            layout: m.is_layout ? {
-              layoutName: m.layout_name,
-              windowCount: m.layout_window_count,
-              windows: m.layout_windows ? JSON.parse(m.layout_windows) : []
-            } : undefined,
-            replyTo: m.reply_to,
-            clientId: m.client_id
-          }));
-        
-        return { messages: roomMessages };
+          .map(m => mapMessageRow(m, room));
+        return { messages };
       }
     } catch (e) {
       app.log.error(e, 'Failed to fetch messages');
@@ -319,6 +293,178 @@ module.exports = function(app) {
     } catch (e) {
       app.log.error(e, 'Failed to fetch trade events');
       return { orders: [], fills: [], events: [] };
+    }
+  });
+
+  // ============= PUBLIC DATA HUB ENDPOINTS =============
+
+  // Hub health check (detailed)
+  app.get('/hub/health', async (request, reply) => {
+    try {
+      const hub = getHub();
+      return hub.getHealth();
+    } catch (e) {
+      app.log.error(e, 'Hub health check failed');
+      return reply.code(500).send({
+        status: 'error',
+        error: e.message,
+        timestamp: Date.now()
+      });
+    }
+  });
+
+  // Get all tickers for an exchange
+  app.get('/hub/tickers/:exchange', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const tickers = hub.getTickers(exchange);
+      return { exchange, count: tickers.length, tickers };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch tickers');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get specific ticker
+  app.get('/hub/ticker/:exchange/:symbol', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const ticker = hub.getTicker(exchange, symbol);
+      if (!ticker) {
+        return reply.code(404).send({ error: 'Ticker not found' });
+      }
+      return ticker;
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch ticker');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get orderbook
+  app.get('/hub/orderbook/:exchange/:symbol', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const orderbook = hub.getOrderbook(exchange, symbol);
+      if (!orderbook) {
+        return reply.code(404).send({ error: 'Orderbook not found' });
+      }
+      return orderbook;
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch orderbook');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get recent trades
+  app.get('/hub/trades/:exchange/:symbol', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const limit = Math.min(Number(request.query.limit) || 50, 100);
+      const trades = hub.getTrades(exchange, symbol, limit);
+      return { exchange, symbol, count: trades.length, trades };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch trades');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get instruments
+  app.get('/hub/instruments/:exchange', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const instruments = hub.getInstruments(exchange);
+      return { exchange, count: instruments.length, instruments };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch instruments');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get funding rates
+  app.get('/hub/funding/:exchange', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const funding = hub.getFunding(exchange);
+      return { exchange, count: funding.length, funding };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch funding');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get open interest
+  app.get('/hub/oi/:exchange/:symbol', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const oi = hub.getOpenInterest(exchange, symbol);
+      if (!oi) {
+        return reply.code(404).send({ error: 'Open interest not found' });
+      }
+      return oi;
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch open interest');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get cached klines (auto-fetches from exchange if cache is too small)
+  app.get('/hub/klines/:exchange/:symbol/:interval', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const interval = String(request.params.interval);
+      const limit = Math.min(Number(request.query.limit) || 500, 500);
+      
+      const klines = await hub.getKlinesWithFallback(exchange, symbol, interval, limit);
+      return { exchange, symbol, interval, count: klines.length, klines };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch klines');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Fetch historical klines (on-demand from exchange)
+  app.get('/hub/klines/:exchange/:symbol/:interval/history', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const interval = String(request.params.interval);
+      const before = request.query.before ? Number(request.query.before) : null;
+      const limit = Math.min(Number(request.query.limit) || 200, 500);
+      
+      const klines = await hub.fetchKlines(exchange, symbol, interval, limit, before);
+      return { exchange, symbol, interval, count: klines.length, klines };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch historical klines');
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // Get liquidations (Bybit only)
+  app.get('/hub/liquidations/:exchange/:symbol', async (request, reply) => {
+    try {
+      const hub = getHub();
+      const exchange = String(request.params.exchange).toLowerCase();
+      const symbol = String(request.params.symbol).toUpperCase();
+      const limit = Math.min(Number(request.query.limit) || 100, 100);
+      const liquidations = hub.getLiquidations(exchange, symbol, limit);
+      return { exchange, symbol, count: liquidations.length, liquidations };
+    } catch (e) {
+      app.log.error(e, 'Failed to fetch liquidations');
+      return reply.code(500).send({ error: e.message });
     }
   });
 };

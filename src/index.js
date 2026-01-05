@@ -13,6 +13,7 @@ const config = require('./config/constants');
 const { sanitizeInput, sanitizeName, checkRateLimit, cleanupRateLimit, pickHeaders, buildUpstreamUrl, pickFirst } = require('./middleware/validation');
 const storage = require('./services/storage');
 const news = require('./services/news');
+const { getHub } = require('./services/hub/PublicDataHub');
 
 // Forwarder logic (kept in main for performance)
 const forwarderRoutes = require('./routes/forwarder');
@@ -89,9 +90,29 @@ async function start() {
     news.connectExternalSources(storage.pgClient, storage.memoryNews);
     news.connectBWE(storage.pgClient, storage.memoryVolatilityAlerts);
     
+    // Initialize Public Data Hub
+    console.log('🔌 Initializing Public Data Hub...');
+    const hub = getHub({ debug: true });
+    hub.start().then(ready => {
+      if (ready) {
+        console.log('✅ Public Data Hub is ready');
+      } else {
+        console.warn('⚠️ Public Data Hub started but may be degraded');
+      }
+    }).catch(err => {
+      console.error('❌ Public Data Hub failed to start:', err.message);
+    });
+    
     // Handle graceful shutdown
     process.on('SIGTERM', () => {
       console.log('SIGTERM received, shutting down...');
+      hub.stop();
+      process.exit(0);
+    });
+
+    process.on('SIGINT', () => {
+      console.log('SIGINT received, shutting down...');
+      hub.stop();
       process.exit(0);
     });
     
