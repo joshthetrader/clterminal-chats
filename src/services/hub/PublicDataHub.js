@@ -9,6 +9,7 @@ const BybitAdapter = require('./BybitAdapter');
 const BlofinAdapter = require('./BlofinAdapter');
 const BitunixAdapter = require('./BitunixAdapter');
 const HyperliquidAdapter = require('./HyperliquidAdapter');
+const BinanceAdapter = require('./BinanceAdapter');
 const StateCache = require('./StateCache');
 const RestPoller = require('./RestPoller');
 const DemandTracker = require('./DemandTracker');
@@ -35,7 +36,8 @@ class PublicDataHub {
       bybit: new BybitAdapter({ debug: this.debug }),
       blofin: new BlofinAdapter({ debug: this.debug }),
       bitunix: new BitunixAdapter({ debug: this.debug }),
-      hyperliquid: new HyperliquidAdapter({ debug: this.debug })
+      hyperliquid: new HyperliquidAdapter({ debug: this.debug }),
+      binance: new BinanceAdapter({ debug: this.debug })
     };
 
     // Create REST poller

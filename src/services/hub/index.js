@@ -11,6 +11,7 @@ const BybitAdapter = require('./BybitAdapter');
 const BlofinAdapter = require('./BlofinAdapter');
 const BitunixAdapter = require('./BitunixAdapter');
 const HyperliquidAdapter = require('./HyperliquidAdapter');
+const BinanceAdapter = require('./BinanceAdapter');
 
 module.exports = {
   PublicDataHub,
@@ -20,6 +21,7 @@ module.exports = {
   BybitAdapter,
   BlofinAdapter,
   BitunixAdapter,
-  HyperliquidAdapter
+  HyperliquidAdapter,
+  BinanceAdapter
 };
 
