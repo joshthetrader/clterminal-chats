@@ -24,7 +24,7 @@ class BybitAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await fetch(`${REST_URL}/v5/market/instruments-info?category=linear&limit=1000`);
+      const res = await this.fetchWithTimeout(`${REST_URL}/v5/market/instruments-info?category=linear&limit=1000`);
       const data = await res.json();
       if (data.retCode === 0 && data.result?.list) {
         this.symbols = data.result.list
@@ -63,8 +63,7 @@ class BybitAdapter extends BaseAdapter {
           nextFundingTime: data.nextFundingTime,
           bid1Price: parseFloat(data.bid1Price || 0),
           ask1Price: parseFloat(data.ask1Price || 0),
-          openInterest: parseFloat(data.openInterest || 0),
-          raw: data
+          openInterest: parseFloat(data.openInterest || 0)
         }
       });
     } else if (channel === 'orderbook') {
@@ -79,8 +78,7 @@ class BybitAdapter extends BaseAdapter {
           asks: (data.a || []).map(([p, q]) => [parseFloat(p), parseFloat(q)]),
           updateId: data.u,
           crossSeq: data.seq,
-          timestamp: msg.ts,
-          raw: data
+          timestamp: msg.ts
         }
       });
     } else if (channel === 'publicTrade') {
@@ -94,8 +92,7 @@ class BybitAdapter extends BaseAdapter {
           size: parseFloat(t.v || 0),
           side: t.S === 'Buy' ? 'buy' : 'sell',
           timestamp: t.T,
-          tradeId: t.i,
-          raw: t
+          tradeId: t.i
         }))
       });
     } else if (channel === 'allLiquidation') {
@@ -112,8 +109,7 @@ class BybitAdapter extends BaseAdapter {
             price: parseFloat(liq.p || 0),
             size: parseFloat(liq.v || 0),
             side: liq.S, // 'Buy' or 'Sell'
-            timestamp: liq.T,
-            raw: liq
+            timestamp: liq.T
           }
         });
       }
@@ -135,8 +131,7 @@ class BybitAdapter extends BaseAdapter {
             l: parseFloat(c.low || 0),
             c: parseFloat(c.close || 0),
             v: parseFloat(c.volume || 0),
-            closed: c.confirm === true,
-            raw: c
+            closed: c.confirm === true
           }
         });
       }
@@ -165,18 +160,21 @@ class BybitAdapter extends BaseAdapter {
   }
 
   /**
-   * Subscribe to allLiquidation for all USDT symbols
-   * This is a single subscription set that gives us ALL liquidations
+   * Subscribe to allLiquidation for top USDT symbols
+   * Limited to top 50 symbols to reduce memory and CPU usage
    */
   subscribeAllLiquidations() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (this.activeSubscriptions.has('liquidations:ALL')) return;
     
-    // Use all fetched symbols or fallback to major ones
-    const syms = this.symbols.length > 0 ? this.symbols : [
+    // Limit to top 50 symbols to reduce subscription overhead and memory usage
+    // Most liquidations happen on major symbols anyway
+    const syms = this.symbols.length > 0 ? this.symbols.slice(0, 50) : [
       'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT',
       'BNBUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'MATICUSDT',
-      'LINKUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'XLMUSDT'
+      'LINKUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'XLMUSDT',
+      'SHIBUSDT', 'TRXUSDT', 'NEARUSDT', 'APTUSDT', 'AAVEUSDT',
+      'LDOUSDT', 'INJUSDT', 'OPUSDT', 'ARBUSDT', 'SUIUSDT'
     ];
     
     const topics = syms.map(s => `allLiquidation.${s}`);

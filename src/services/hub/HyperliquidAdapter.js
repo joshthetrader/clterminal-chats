@@ -19,7 +19,7 @@ class HyperliquidAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await fetch(REST_URL + '/info', {
+      const res = await this.fetchWithTimeout(REST_URL + '/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'meta' })
@@ -61,8 +61,7 @@ class HyperliquidAdapter extends BaseAdapter {
             symbol: coin,
             data: {
               lastPrice: parseFloat(price),
-              markPrice: parseFloat(price),
-              raw: { coin, price }
+              markPrice: parseFloat(price)
             }
           });
         });
@@ -81,8 +80,7 @@ class HyperliquidAdapter extends BaseAdapter {
             size: parseFloat(t.sz || t.size || 0),
             side: t.side === 'B' ? 'buy' : 'sell',
             timestamp: t.time || t.ts,
-            tradeId: t.tid,
-            raw: t
+            tradeId: t.tid
           }]
         });
       });
@@ -96,8 +94,7 @@ class HyperliquidAdapter extends BaseAdapter {
         data: {
           bids: (data.levels?.[0] || []).map(l => [parseFloat(l.px), parseFloat(l.sz)]),
           asks: (data.levels?.[1] || []).map(l => [parseFloat(l.px), parseFloat(l.sz)]),
-          timestamp: data.time,
-          raw: data
+          timestamp: data.time
         }
       });
     } else if (channel === 'activeAssetCtx') {
@@ -113,8 +110,7 @@ class HyperliquidAdapter extends BaseAdapter {
           markPrice: parseFloat(ctx.markPx || 0),
           fundingRate: parseFloat(ctx.funding || 0),
           openInterest: parseFloat(ctx.openInterest || 0),
-          volume24h: parseFloat(ctx.dayNtlVlm || 0),
-          raw: ctx
+          volume24h: parseFloat(ctx.dayNtlVlm || 0)
         }
       });
     } else if (channel === 'candle') {
@@ -133,8 +129,7 @@ class HyperliquidAdapter extends BaseAdapter {
           l: parseFloat(data.l || 0),
           c: parseFloat(data.c || 0),
           v: parseFloat(data.v || 0),
-          closed: data.x === true,
-          raw: data
+          closed: data.x === true
         }
       });
     }

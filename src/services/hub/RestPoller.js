@@ -51,12 +51,12 @@ class RestPoller {
     if (this.running) return;
     this.running = true;
 
-    // Initial fetch
-    await this.pollAll();
-
-    // Start periodic polling
+    // Start periodic polling immediately
     this.timers.main = setInterval(() => this.pollAll(), this.pollInterval);
     this.log('Started polling every', this.pollInterval / 1000, 'seconds');
+
+    // Initial fetch in background (non-blocking) - don't await
+    this.pollAll().catch(e => console.error('[RestPoller] Initial poll error:', e.message));
   }
 
   stop() {
@@ -118,8 +118,8 @@ class RestPoller {
           minOrderQty: parseFloat(i.lotSizeFilter?.minOrderQty || 0),
           maxOrderQty: parseFloat(i.lotSizeFilter?.maxOrderQty || 0),
           minLeverage: parseFloat(i.leverageFilter?.minLeverage || 1),
-          maxLeverage: parseFloat(i.leverageFilter?.maxLeverage || 1),
-          raw: i
+          maxLeverage: parseFloat(i.leverageFilter?.maxLeverage || 1)
+          // raw field removed to save memory
         }));
         this.cache.setInstruments('bybit', instruments);
       }
@@ -134,8 +134,7 @@ class RestPoller {
             turnover24h: parseFloat(t.turnover24h || 0),
             price24hPcnt: parseFloat(t.price24hPcnt || 0),
             high24h: parseFloat(t.highPrice24h || 0),
-            low24h: parseFloat(t.lowPrice24h || 0),
-            raw: t
+            low24h: parseFloat(t.lowPrice24h || 0)
           });
           this.cache.setFunding('bybit', t.symbol, {
             fundingRate: parseFloat(t.fundingRate || 0),
@@ -173,8 +172,8 @@ class RestPoller {
           maxSize: parseFloat(i.maxSize || 0),
           maxLeverage: parseFloat(i.maxLeverage || 1),
           contractValue: parseFloat(i.contractValue || 1),
-          state: i.state,
-          raw: i
+          state: i.state
+          // raw field removed to save memory
         }));
         this.cache.setInstruments('blofin', instruments);
         for (const inst of instruments) instMap.set(inst.instId, inst);
@@ -209,8 +208,7 @@ class RestPoller {
               lastPrice: price,
               volume24h: contracts,
               turnover24h: usdVolume,
-              contractValue: contractValue,
-              raw: t
+              contractValue: contractValue
             });
           }
         }
@@ -231,8 +229,8 @@ class RestPoller {
           symbol: t.symbol,
           tickSize: parseFloat(t.priceStep || 0),
           lotSize: parseFloat(t.sizeStep || 0),
-          minOrderQty: parseFloat(t.minSize || 0),
-          raw: t
+          minOrderQty: parseFloat(t.minSize || 0)
+          // raw field removed to save memory
         }));
         this.cache.setInstruments('bitunix', instruments);
 
@@ -252,8 +250,7 @@ class RestPoller {
               turnover24h: volume,
               price24hPcnt: change,
               high24h: parseFloat(t.high || 0),
-              low24h: parseFloat(t.low || 0),
-              raw: t
+              low24h: parseFloat(t.low || 0)
             });
           }
         }
@@ -286,8 +283,8 @@ class RestPoller {
         name: u.name,
         szDecimals: u.szDecimals,
         maxLeverage: u.maxLeverage,
-        assetIndex: idx,
-        raw: u
+        assetIndex: idx
+        // raw field removed to save memory
       }));
       this.cache.setInstruments('hyperliquid', instruments);
       
@@ -308,8 +305,7 @@ class RestPoller {
           turnover24h: volume24h,
           price24hPcnt: change,
           fundingRate: parseFloat(ctx.funding || 0),
-          openInterest: parseFloat(ctx.openInterest || 0),
-          raw: ctx
+          openInterest: parseFloat(ctx.openInterest || 0)
         });
 
         this.cache.setFunding('hyperliquid', name, { fundingRate: parseFloat(ctx.funding || 0) });

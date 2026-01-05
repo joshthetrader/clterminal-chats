@@ -16,11 +16,11 @@ const DemandTracker = require('./DemandTracker');
 const RateLimitCoordinator = require('./RateLimitCoordinator');
 const RequestDeduplicator = require('./RequestDeduplicator');
 
-const STARTUP_TIMEOUT = 60000; // 60 seconds to wait for all exchanges
+const STARTUP_TIMEOUT = 15000; // 15 seconds max to wait for exchanges (reduced from 60s)
 
 class PublicDataHub {
   constructor(options = {}) {
-    this.debug = options.debug !== undefined ? options.debug : true; // verbose by default
+    this.debug = options.debug !== undefined ? options.debug : false; // quiet by default for performance
     this.ready = false;
     this.startupPromise = null;
 
@@ -120,10 +120,15 @@ class PublicDataHub {
   async _doStart() {
     this.log('Starting Public Data Hub...');
 
-    // Connect all adapters in parallel
+    // Connect all adapters in parallel with individual timeouts
     const connectPromises = Object.entries(this.adapters).map(async ([name, adapter]) => {
       try {
-        await adapter.connect();
+        // Each adapter has 10s to connect (fetchSymbols has 5s timeout + WS connect)
+        const connectWithTimeout = Promise.race([
+          adapter.connect(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), 10000))
+        ]);
+        await connectWithTimeout;
         this.log(`${name} adapter connected`);
         return { name, success: true };
       } catch (e) {
@@ -132,29 +137,27 @@ class PublicDataHub {
       }
     });
 
-    // Wait for connections with timeout
-    const results = await Promise.race([
-      Promise.all(connectPromises),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Startup timeout')), STARTUP_TIMEOUT)
-      )
-    ]).catch(e => {
-      console.error('[PublicDataHub] Startup timeout, continuing with available connections');
-      return connectPromises;
-    });
+    // Use allSettled - don't wait for all, continue with whatever succeeds
+    const startTime = Date.now();
+    await Promise.race([
+      Promise.allSettled(connectPromises),
+      new Promise(resolve => setTimeout(resolve, STARTUP_TIMEOUT))
+    ]);
+    
+    console.log(`[PublicDataHub] Adapter connection phase completed in ${Date.now() - startTime}ms`);
 
-    // Check connection status
+    // Check connection status - continue with whatever is connected
     const connected = Object.entries(this.adapters)
       .filter(([_, a]) => a.isConnected())
       .map(([name]) => name);
 
     this.log(`Connected exchanges: ${connected.join(', ') || 'none'}`);
 
-    // Start REST poller
-    await this.poller.start();
+    // Start REST poller (non-blocking - don't await initial poll)
+    this.poller.start().catch(e => console.error('[PublicDataHub] Poller start error:', e.message));
 
-    // Wait a bit for REST poller to populate cache with volume data
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Don't wait for REST data - let it populate in background
+    // Removed: await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Set hot symbols for each connected exchange based on volume
     for (const exchange of connected) {
@@ -171,6 +174,11 @@ class PublicDataHub {
     if (this.ready) {
       console.log('✅ Public Data Hub is ready');
       this.log('Hub is ready with hybrid on-demand subscription model');
+      
+      // Start periodic cleanup of stale cache data (every 10 minutes)
+      this.cleanupInterval = setInterval(() => {
+        this.cache.cleanupStaleData();
+      }, 10 * 60 * 1000);
     } else {
       console.error('[PublicDataHub] Hub started but no exchanges connected');
     }
@@ -180,6 +188,12 @@ class PublicDataHub {
 
   async stop() {
     this.log('Stopping...');
+
+    // Stop cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
 
     // Stop poller
     this.poller.stop();
@@ -216,7 +230,7 @@ class PublicDataHub {
       const msg = typeof message === 'string' ? JSON.parse(message) : message;
       const { action, exchange, channel, symbol } = msg;
 
-      console.log(`[Hub] 📨 Client message: action=${action}, exchange=${exchange}, channel=${channel}, symbol=${symbol}`);
+      if (this.debug) console.log(`[Hub] 📨 Client message: action=${action}, exchange=${exchange}, channel=${channel}, symbol=${symbol}`);
 
       if (action === 'subscribe') {
         this.subscribe(ws, exchange, channel, symbol);

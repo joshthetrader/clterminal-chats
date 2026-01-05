@@ -11,6 +11,22 @@ const polymarketCache = new Map(); // cacheKey -> { status, contentType, body, t
 const pendingPolymarketFetches = new Map(); // cacheKey -> Promise
 const polymarketPollingIntervals = new Map(); // tagId -> intervalId
 
+// Periodic cleanup of expired Polymarket cache entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, entry] of polymarketCache) {
+    // Remove entries older than 2x TTL
+    if (now - entry.ts > POLYMARKET_CACHE_TTL * 2) {
+      polymarketCache.delete(key);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[Polymarket] Cleaned ${cleaned} expired cache entries`);
+  }
+}, POLYMARKET_CACHE_TTL);
+
 // Polymarket tag IDs to poll
 const POLYMARKET_TAGS_TO_POLL = [
   { id: 21, label: 'crypto' },

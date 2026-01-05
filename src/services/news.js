@@ -147,7 +147,10 @@ function pushNews(item, pgClient, memoryNews) {
   } catch (_) { }
 
   memoryNews.push(item);
-  if (memoryNews.length > 1000) memoryNews.slice(-1000);
+  // In-place mutation to prevent unbounded growth
+  if (memoryNews.length > 1000) {
+    memoryNews.splice(0, memoryNews.length - 1000);
+  }
 
   if (pgClient) {
     try {
@@ -408,8 +411,9 @@ function pushVolatilityAlert(alert, pgClient, memoryVolatilityAlerts) {
   };
 
   memoryVolatilityAlerts.push(alertData);
+  // In-place mutation - assignment doesn't work on passed array reference
   if (memoryVolatilityAlerts.length > 100) {
-    memoryVolatilityAlerts = memoryVolatilityAlerts.slice(-100);
+    memoryVolatilityAlerts.splice(0, memoryVolatilityAlerts.length - 100);
   }
 
   if (pgClient) {

@@ -18,7 +18,7 @@ class BlofinAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await fetch(`${REST_URL}/api/v1/market/instruments?instType=SWAP`);
+      const res = await this.fetchWithTimeout(`${REST_URL}/api/v1/market/instruments?instType=SWAP`);
       const data = await res.json();
       if (data.code === '0' && data.data) {
         this.symbols = data.data
@@ -66,8 +66,7 @@ class BlofinAdapter extends BaseAdapter {
           nextFundingTime: d.nextFundingTime,
           bid1Price: parseFloat(d.bidPrice || 0),
           ask1Price: parseFloat(d.askPrice || 0),
-          openInterest: parseFloat(d.openInterest || 0),
-          raw: d
+          openInterest: parseFloat(d.openInterest || 0)
         }
       });
     } else if (channel === 'books' || channel === 'books5' || channel === 'books50') {
@@ -78,8 +77,7 @@ class BlofinAdapter extends BaseAdapter {
         data: {
           bids: (d.bids || []).map(([p, q]) => [parseFloat(p), parseFloat(q)]),
           asks: (d.asks || []).map(([p, q]) => [parseFloat(p), parseFloat(q)]),
-          timestamp: d.ts,
-          raw: d
+          timestamp: d.ts
         }
       });
     } else if (channel === 'trades') {
@@ -93,8 +91,7 @@ class BlofinAdapter extends BaseAdapter {
           size: parseFloat(t.size || 0),
           side: t.side === 'buy' ? 'buy' : 'sell',
           timestamp: t.ts,
-          tradeId: t.tradeId,
-          raw: t
+          tradeId: t.tradeId
         }))
       });
     } else if (channel === 'liquidations') {
@@ -106,8 +103,7 @@ class BlofinAdapter extends BaseAdapter {
           price: parseFloat(d.price || 0),
           size: parseFloat(d.size || 0),
           side: d.side,
-          timestamp: d.ts,
-          raw: d
+          timestamp: d.ts
         }
       });
     } else if (channel.startsWith('candle')) {
@@ -124,8 +120,7 @@ class BlofinAdapter extends BaseAdapter {
           l: parseFloat(d.low || d[3] || 0),
           c: parseFloat(d.close || d[4] || 0),
           v: parseFloat(d.vol || d[5] || 0),
-          closed: d.confirm === '1' || d.confirm === true,
-          raw: d
+          closed: d.confirm === '1' || d.confirm === true
         }
       });
     }

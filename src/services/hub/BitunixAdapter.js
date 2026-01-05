@@ -21,7 +21,7 @@ class BitunixAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await fetch(`${REST_URL}/api/v1/futures/market/tickers`);
+      const res = await this.fetchWithTimeout(`${REST_URL}/api/v1/futures/market/tickers`);
       const data = await res.json();
       if (data.code === 0 && data.data) {
         this.symbols = data.data
@@ -63,8 +63,7 @@ class BitunixAdapter extends BaseAdapter {
           price24hPcnt: parseFloat(data.r || data.c || 0) / 100,
           high24h: parseFloat(data.h || 0),
           low24h: parseFloat(data.l || 0),
-          open24h: parseFloat(data.o || 0),
-          raw: data
+          open24h: parseFloat(data.o || 0)
         }
       });
     } else if (ch === 'depth' || ch.startsWith('depth')) {
@@ -75,8 +74,7 @@ class BitunixAdapter extends BaseAdapter {
         data: {
           bids: (data.bids || []).map(([p, q]) => [parseFloat(p), parseFloat(q)]),
           asks: (data.asks || []).map(([p, q]) => [parseFloat(p), parseFloat(q)]),
-          timestamp: msg.ts,
-          raw: data
+          timestamp: msg.ts
         }
       });
     } else if (ch === 'trade') {
@@ -90,8 +88,7 @@ class BitunixAdapter extends BaseAdapter {
           size: parseFloat(t.v || t.q || t.qty || t.size || 0),
           side: (t.s || t.m || t.side) === 'buy' ? 'buy' : 'sell',
           timestamp: t.t || t.ts,
-          tradeId: t.id,
-          raw: t
+          tradeId: t.id
         }))
       });
     } else if (ch.startsWith('market_kline_')) {
@@ -119,8 +116,7 @@ class BitunixAdapter extends BaseAdapter {
           l: parseFloat(data.l || data.low || 0),
           c: parseFloat(data.c || data.close || 0),
           v: parseFloat(data.b || data.v || data.volume || 0),
-          closed: data.confirm === true || data.confirm === '1',
-          raw: data
+          closed: data.confirm === true || data.confirm === '1'
         }
       });
     }

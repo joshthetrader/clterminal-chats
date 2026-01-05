@@ -20,7 +20,11 @@ const forwarderRoutes = require('./routes/forwarder');
 const apiRoutes = require('./routes/api');
 const wsRoutes = require('./routes/websocket');
 
-const app = Fastify({ logger: true });
+const app = Fastify({ 
+  logger: true,
+  connectionTimeout: 10000,  // 10s to establish connection
+  requestTimeout: 20000      // 20s max per request
+});
 app.register(fastifyWebsocket);
 
 // CORS setup
@@ -90,9 +94,11 @@ async function start() {
     news.connectExternalSources(storage.pgClient, storage.memoryNews);
     news.connectBWE(storage.pgClient, storage.memoryVolatilityAlerts);
     
-    // Initialize Public Data Hub
-    console.log('🔌 Initializing Public Data Hub...');
-    const hub = getHub({ debug: true });
+    // Initialize Public Data Hub (non-blocking - server is already listening)
+    console.log('🔌 Initializing Public Data Hub (non-blocking)...');
+    const hub = getHub({ debug: false });
+    
+    // Fire and forget - hub will be ready when ready, server is already accepting requests
     hub.start().then(ready => {
       if (ready) {
         console.log('✅ Public Data Hub is ready');
@@ -102,6 +108,15 @@ async function start() {
     }).catch(err => {
       console.error('❌ Public Data Hub failed to start:', err.message);
     });
+    
+    // Memory monitoring - log heap usage every 5 minutes
+    setInterval(() => {
+      const used = process.memoryUsage();
+      const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
+      const heapTotalMB = Math.round(used.heapTotal / 1024 / 1024);
+      const rssMB = Math.round(used.rss / 1024 / 1024);
+      console.log(`[Memory] Heap: ${heapUsedMB}/${heapTotalMB}MB, RSS: ${rssMB}MB`);
+    }, 5 * 60 * 1000);
     
     // Handle graceful shutdown
     process.on('SIGTERM', () => {

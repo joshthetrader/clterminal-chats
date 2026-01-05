@@ -443,6 +443,51 @@ class StateCache {
       this.lastUpdate.clear();
     }
   }
+
+  /**
+   * Cleanup stale data that hasn't been updated in maxAge ms
+   * Call periodically to prevent unbounded memory growth
+   */
+  cleanupStaleData(maxAge = 30 * 60 * 1000) {
+    const now = Date.now();
+    let cleaned = 0;
+    
+    for (const coll of this._collections) {
+      const map = this[coll];
+      for (const key of map.keys()) {
+        const lastUpdateKey = `${coll}:${key}`;
+        const lastUpdated = this.lastUpdate.get(lastUpdateKey);
+        
+        // Remove if never updated or stale beyond maxAge
+        if (!lastUpdated || now - lastUpdated > maxAge) {
+          map.delete(key);
+          this.lastUpdate.delete(lastUpdateKey);
+          cleaned++;
+        }
+      }
+    }
+    
+    // Also clean orphaned lastUpdate entries
+    for (const key of this.lastUpdate.keys()) {
+      const lastUpdated = this.lastUpdate.get(key);
+      if (!lastUpdated || now - lastUpdated > maxAge) {
+        this.lastUpdate.delete(key);
+      }
+    }
+    
+    // Clean empty subscriber sets
+    for (const [subKey, subs] of this.subscribers) {
+      if (subs.size === 0) {
+        this.subscribers.delete(subKey);
+      }
+    }
+    
+    if (cleaned > 0) {
+      this.log(`Cleaned ${cleaned} stale entries`);
+    }
+    
+    return cleaned;
+  }
 }
 
 module.exports = StateCache;

@@ -76,6 +76,17 @@ function buildUpstreamUrl(base, suffix, search) {
   return `${base}${path}${qs}`;
 }
 
+// Periodic cleanup of expired rate limit entries (every 60s)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, limit] of rateLimits) {
+    // Remove entries that have been expired for > 5 minutes
+    if (now > limit.resetTime + 300000) {
+      rateLimits.delete(id);
+    }
+  }
+}, 60000);
+
 module.exports = {
   sanitizeInput,
   sanitizeName,

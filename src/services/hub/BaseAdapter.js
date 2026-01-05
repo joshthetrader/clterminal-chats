@@ -2,6 +2,9 @@
 
 const WebSocket = require('ws');
 
+// Timeout for REST API calls during initialization
+const FETCH_TIMEOUT_MS = 5000;
+
 /**
  * BaseAdapter - Abstract parent for all exchange WebSocket adapters
  * Handles common lifecycle: connect, close, reconnect, ping, status tracking.
@@ -26,6 +29,20 @@ class BaseAdapter {
     this.onDataCallback = null;
     this.onStatusCallback = null;
     this.lastUpdate = 0;
+  }
+
+  /**
+   * Fetch with timeout wrapper - prevents hanging on slow APIs
+   */
+  async fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      return res;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   log(...args) {

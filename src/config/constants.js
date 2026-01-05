@@ -9,8 +9,8 @@ module.exports = {
   DATABASE_URL: process.env.DATABASE_URL || process.env.POSTGRES_URL || '',
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
   ENABLE_TRADE_EVENTS_READ: String(process.env.ENABLE_TRADE_EVENTS_READ || 'false').toLowerCase() === 'true',
-  // Some upstreams (Blofin) are slow to respond; give them more time by default
-  UPSTREAM_TIMEOUT_MS: Number(process.env.UPSTREAM_TIMEOUT_MS || 15000),
+  // Upstream timeout - reduced from 15s to 8s for faster failures
+  UPSTREAM_TIMEOUT_MS: Number(process.env.UPSTREAM_TIMEOUT_MS || 8000),
   
   // CORS origins configuration
   getAllowedOrigins: () => {
@@ -62,13 +62,13 @@ module.exports = {
     'x-bapi-api-key','x-bapi-sign','x-bapi-timestamp','x-bapi-recv-window','content-type','referer'
   ]),
   
-  // HTTP/HTTPS agents for connection pooling
+  // HTTP/HTTPS agents for connection pooling - reduced timeout to 8s
   httpsAgent: new https.Agent({
     keepAlive: true,
     keepAliveMsecs: 30000,
     maxSockets: 100,
     maxFreeSockets: 10,
-    timeout: 15000,
+    timeout: 8000,
     scheduling: 'fifo'
   }),
   
@@ -77,7 +77,7 @@ module.exports = {
     keepAliveMsecs: 30000,
     maxSockets: 100,
     maxFreeSockets: 10,
-    timeout: 15000,
+    timeout: 8000,
     scheduling: 'fifo'
   }),
   

@@ -13,7 +13,7 @@ class BinanceAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await fetch(`${this.restUrl}/fapi/v1/exchangeInfo`);
+      const res = await this.fetchWithTimeout(`${this.restUrl}/fapi/v1/exchangeInfo`);
       const data = await res.json();
       if (data.symbols && Array.isArray(data.symbols)) {
         this.symbols = data.symbols
