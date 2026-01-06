@@ -238,15 +238,16 @@ class DemandTracker {
   }
 
   subscribeLiquidation(exchange, symbol) {
-    if (exchange !== 'bybit') {
-      this.log(`Liquidations only available on Bybit, not ${exchange}`);
+    // Liquidations supported on Bybit and Binance
+    if (exchange !== 'bybit' && exchange !== 'binance') {
+      this.log(`Liquidations only available on Bybit and Binance, not ${exchange}`);
       return false;
     }
     return this._handleSubscribe(exchange, symbol, 'liquidations', 'subscribeLiquidation');
   }
 
   unsubscribeLiquidation(exchange, symbol) {
-    if (exchange !== 'bybit') return;
+    if (exchange !== 'bybit' && exchange !== 'binance') return;
     this._handleUnsubscribe(exchange, symbol, 'liquidations', 'performLiquidationCleanup');
   }
 

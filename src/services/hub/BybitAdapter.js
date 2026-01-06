@@ -160,37 +160,44 @@ class BybitAdapter extends BaseAdapter {
   }
 
   /**
-   * Subscribe to allLiquidation for top USDT symbols
-   * Limited to top 50 symbols to reduce memory and CPU usage
+   * Subscribe to allLiquidation for ALL USDT symbols
+   * Per Bybit docs: Topic is allLiquidation.{symbol} - must subscribe to each symbol individually
+   * https://bybit-exchange.github.io/docs/v5/websocket/public/all-liquidation
    */
   subscribeAllLiquidations() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (this.activeSubscriptions.has('liquidations:ALL')) return;
     
-    // Limit to top 50 symbols to reduce subscription overhead and memory usage
-    // Most liquidations happen on major symbols anyway
-    const syms = this.symbols.length > 0 ? this.symbols.slice(0, 50) : [
+    // Subscribe to ALL available symbols for complete liquidation coverage
+    // Bybit does not have a wildcard - each symbol needs individual subscription
+    const syms = this.symbols.length > 0 ? this.symbols : [
+      // Fallback list if symbols not yet loaded
       'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT',
       'BNBUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'MATICUSDT',
       'LINKUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'XLMUSDT',
       'SHIBUSDT', 'TRXUSDT', 'NEARUSDT', 'APTUSDT', 'AAVEUSDT',
-      'LDOUSDT', 'INJUSDT', 'OPUSDT', 'ARBUSDT', 'SUIUSDT'
+      'LDOUSDT', 'INJUSDT', 'OPUSDT', 'ARBUSDT', 'SUIUSDT',
+      'WIFUSDT', 'PEPEUSDT', 'BONKUSDT', 'FLOKIUSDT', 'ONDOUSDT',
+      'FETUSDT', 'RENDERUSDT', 'FILUSDT', 'IMXUSDT', 'SEIUSDT',
+      'TIAUSDT', 'JUPUSDT', 'STXUSDT', 'WLDUSDT', 'ORDIUSDT'
     ];
     
     const topics = syms.map(s => `allLiquidation.${s}`);
     
-    // Subscribe in batches
+    console.log(`[BybitAdapter] Subscribing to allLiquidation for ${syms.length} symbols...`);
+    
+    // Subscribe in batches with staggered timing to avoid rate limits
     for (let i = 0; i < topics.length; i += MAX_SUBS_PER_MESSAGE) {
       const batch = topics.slice(i, i + MAX_SUBS_PER_MESSAGE);
       setTimeout(() => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ op: 'subscribe', args: batch }));
         }
-      }, (i / MAX_SUBS_PER_MESSAGE) * 100); // Stagger subscriptions
+      }, (i / MAX_SUBS_PER_MESSAGE) * 150); // 150ms between batches
     }
     
     this.activeSubscriptions.add('liquidations:ALL');
-    this.log(`Subscribed to allLiquidation for ${syms.length} symbols`);
+    console.log(`[BybitAdapter] ✅ Queued allLiquidation subscriptions for ${syms.length} symbols`);
   }
 
   subscribeSymbol(symbol, channels = ['tickers', 'orderbook', 'trades']) {

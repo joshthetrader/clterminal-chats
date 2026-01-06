@@ -127,6 +127,29 @@ class BinanceAdapter extends BaseAdapter {
       // Ignore parse errors or non-json messages
     }
   }
+
+  /**
+   * Subscribe to liquidations - Binance uses !forceOrder@arr for ALL symbols
+   * Called by DemandTracker when client subscribes
+   */
+  subscribeLiquidation(symbol) {
+    // All liquidations are already subscribed via subscribeAllLiquidations() on _onOpen
+    // Just mark as active for tracking
+    const key = `liquidations:${symbol}`;
+    this.activeSubscriptions.add(key);
+    
+    // Ensure all liquidations are subscribed
+    if (!this.activeSubscriptions.has('liquidations:ALL')) {
+      this.subscribeAllLiquidations();
+    }
+  }
+
+  unsubscribeLiquidation(symbol) {
+    // We don't actually unsubscribe from the feed - it's shared
+    // Just remove from tracking
+    const key = `liquidations:${symbol}`;
+    this.activeSubscriptions.delete(key);
+  }
 }
 
 module.exports = BinanceAdapter;

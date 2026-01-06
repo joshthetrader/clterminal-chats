@@ -15,6 +15,7 @@ class RestPoller {
     this.pollInterval = options.pollInterval || POLL_INTERVAL;
     this.timers = {};
     this.running = false;
+    this.firstPollComplete = false; // Track if initial poll has finished
   }
 
   log(...args) {
@@ -48,15 +49,26 @@ class RestPoller {
   }
 
   async start() {
-    if (this.running) return;
+    if (this.running) return false;
     this.running = true;
 
-    // Start periodic polling immediately
-    this.timers.main = setInterval(() => this.pollAll(), this.pollInterval);
     this.log('Started polling every', this.pollInterval / 1000, 'seconds');
 
-    // Initial fetch in background (non-blocking) - don't await
-    this.pollAll().catch(e => console.error('[RestPoller] Initial poll error:', e.message));
+    // BLOCKING initial poll - wait for cache to be populated before accepting requests
+    const startTime = Date.now();
+    try {
+      await this.pollAll(true); // Pass true to skip jitter on first poll
+      this.firstPollComplete = true;
+      console.log(`[RestPoller] ✅ Initial poll complete in ${Date.now() - startTime}ms - cache is warm`);
+    } catch (e) {
+      console.error('[RestPoller] Initial poll error:', e.message);
+      this.firstPollComplete = true; // Mark complete anyway so we don't block forever
+    }
+
+    // Start periodic polling AFTER initial poll completes
+    this.timers.main = setInterval(() => this.pollAll(false), this.pollInterval);
+    
+    return this.firstPollComplete;
   }
 
   stop() {
@@ -68,11 +80,14 @@ class RestPoller {
     this.log('Stopped');
   }
 
-  async pollAll() {
+  async pollAll(skipJitter = false) {
     // Add small random jitter (0-2s) to prevent synchronized spikes
-    const jitter = Math.floor(Math.random() * 2000);
-    if (jitter > 0) {
-      await new Promise(resolve => setTimeout(resolve, jitter));
+    // Skip jitter on first poll for fast startup
+    if (!skipJitter) {
+      const jitter = Math.floor(Math.random() * 2000);
+      if (jitter > 0) {
+        await new Promise(resolve => setTimeout(resolve, jitter));
+      }
     }
 
     const exchanges = ['bybit', 'blofin', 'bitunix', 'hyperliquid'];

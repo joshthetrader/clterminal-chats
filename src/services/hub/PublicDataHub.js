@@ -153,17 +153,23 @@ class PublicDataHub {
 
     this.log(`Connected exchanges: ${connected.join(', ') || 'none'}`);
 
-    // Start REST poller (non-blocking - don't await initial poll)
-    this.poller.start().catch(e => console.error('[PublicDataHub] Poller start error:', e.message));
+    // Start REST poller - AWAIT initial poll to ensure cache is warm before accepting requests
+    console.log('[PublicDataHub] Warming up cache with initial REST poll...');
+    const pollerStartTime = Date.now();
+    try {
+      await this.poller.start();
+      console.log(`[PublicDataHub] Cache warmed in ${Date.now() - pollerStartTime}ms`);
+    } catch (e) {
+      console.error('[PublicDataHub] Poller start error:', e.message);
+    }
 
-    // Don't wait for REST data - let it populate in background
-    // Removed: await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Set hot symbols for each connected exchange based on volume
+    // Set hot symbols for each connected exchange based on volume (now cache is populated)
+    const hotSymbolsMap = {};
     for (const exchange of connected) {
       const topSymbols = this.poller.getTopSymbolsByVolume(exchange, 30);
       if (topSymbols.length > 0) {
         this.demandTracker.setHotSymbols(exchange, topSymbols);
+        hotSymbolsMap[exchange] = topSymbols.slice(0, 5); // Top 5 for kline pre-caching
         this.log(`Set ${topSymbols.length} hot symbols for ${exchange}`);
       }
     }
@@ -174,6 +180,11 @@ class PublicDataHub {
     if (this.ready) {
       console.log('✅ Public Data Hub is ready');
       this.log('Hub is ready with hybrid on-demand subscription model');
+      
+      // Pre-cache klines for top 5 symbols per exchange (non-blocking background task)
+      this._precacheTopKlines(hotSymbolsMap).catch(e => 
+        console.error('[PublicDataHub] Kline pre-cache error:', e.message)
+      );
       
       // Start periodic cleanup of stale cache data (every 10 minutes)
       this.cleanupInterval = setInterval(() => {
@@ -451,6 +462,47 @@ class PublicDataHub {
   // Get liquidations
   getLiquidations(exchange, symbol, limit = 100) {
     return this.cache.getLiquidations(exchange, symbol, limit);
+  }
+
+  // ============= KLINE PRE-CACHING =============
+
+  /**
+   * Pre-cache klines for top symbols to ensure instant chart loads
+   * Called on startup in background (non-blocking)
+   */
+  async _precacheTopKlines(hotSymbolsMap) {
+    const intervals = ['1', '15', '60', 'D']; // 1m, 15m, 1h, 1D - most common
+    const startTime = Date.now();
+    let cached = 0;
+    
+    console.log('[PublicDataHub] Pre-caching klines for top symbols...');
+    
+    for (const [exchange, symbols] of Object.entries(hotSymbolsMap)) {
+      if (!symbols || symbols.length === 0) continue;
+      
+      // Pre-cache only 1m and 15m for top 3 symbols to avoid rate limits
+      const topSymbols = symbols.slice(0, 3);
+      const quickIntervals = ['1', '15'];
+      
+      for (const symbol of topSymbols) {
+        for (const interval of quickIntervals) {
+          try {
+            // Small delay between fetches to avoid rate limiting
+            await new Promise(r => setTimeout(r, 100));
+            
+            const klines = await this.poller.fetchKlines(exchange, symbol, interval, 200);
+            if (klines.length > 0) {
+              cached++;
+            }
+          } catch (e) {
+            // Silently skip failures - this is just optimization
+            this.log(`Pre-cache failed for ${exchange}/${symbol}/${interval}:`, e.message);
+          }
+        }
+      }
+    }
+    
+    console.log(`[PublicDataHub] ✅ Pre-cached ${cached} kline sets in ${Date.now() - startTime}ms`);
   }
 
   // ============= HEALTH =============

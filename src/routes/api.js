@@ -160,29 +160,42 @@ module.exports = function(app) {
   app.get('/api/messages/:room', async (request, reply) => {
     const room = String(request.params.room || 'global');
     const limit = Math.min(Number(request.query.limit) || 50, 100);
+    const before = request.query.before ? Number(request.query.before) : null;
     
     try {
       if (storage.pgClient) {
-        const result = await storage.pgClient.query(
-          `SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss,
-                  is_order, order_sym, order_side, order_lev, order_price, order_qty, order_type, order_take_profit, order_stop_loss,
-                  is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id,
-                  EXTRACT(EPOCH FROM created_at) * 1000 as ts
-           FROM chat_messages 
-           WHERE room = $1 
-           ORDER BY created_at DESC 
-           LIMIT $2`,
-          [room, limit]
-        );
+        let query = `
+          SELECT id, user_name, user_color, text, is_trade, trade_sym, trade_side, trade_lev, trade_entry, trade_take_profit, trade_stop_loss,
+                 is_order, order_sym, order_side, order_lev, order_price, order_qty, order_type, order_take_profit, order_stop_loss,
+                 is_layout, layout_name, layout_window_count, layout_windows, reply_to, client_id,
+                 EXTRACT(EPOCH FROM created_at) * 1000 as ts
+          FROM chat_messages 
+          WHERE room = $1
+        `;
+        const params = [room, limit];
         
+        if (before) {
+          query += ` AND created_at < TO_TIMESTAMP($3/1000.0)`;
+          params.push(before);
+        }
+        
+        query += ` ORDER BY created_at DESC LIMIT $2`;
+        
+        const result = await storage.pgClient.query(query, params);
         const messages = result.rows.reverse().map(row => mapMessageRow(row, room));
         return { messages };
       } else {
-        const messages = storage.memoryMessages
-          .filter(m => m.room === room)
+        let messages = storage.memoryMessages.filter(m => m.room === room);
+        
+        if (before) {
+          messages = messages.filter(m => m.ts < before);
+        }
+        
+        const slicedMessages = messages
           .slice(-limit)
           .map(m => mapMessageRow(m, room));
-        return { messages };
+          
+        return { messages: slicedMessages };
       }
     } catch (e) {
       app.log.error(e, 'Failed to fetch messages');
