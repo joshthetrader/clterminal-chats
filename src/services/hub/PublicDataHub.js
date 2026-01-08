@@ -372,9 +372,22 @@ class PublicDataHub {
 
   // ============= REST API HANDLERS =============
 
-  // Get all tickers for an exchange
-  getTickers(exchange) {
-    return this.cache.getAllTickers(exchange);
+  // Get all tickers for an exchange (triggers fetch if cache empty)
+  async getTickers(exchange) {
+    let tickers = this.cache.getAllTickers(exchange);
+    
+    // If cache is empty, trigger a fetch for this exchange
+    if (tickers.length === 0 && this.ready) {
+      this.log(`Cache empty for ${exchange} tickers, triggering fetch...`);
+      try {
+        await this.poller.pollExchange(exchange);
+        tickers = this.cache.getAllTickers(exchange);
+      } catch (e) {
+        console.error(`[PublicDataHub] Failed to fetch ${exchange} tickers:`, e.message);
+      }
+    }
+    
+    return tickers;
   }
 
   // Get specific ticker

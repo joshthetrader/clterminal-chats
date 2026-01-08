@@ -21,16 +21,15 @@ class BitunixAdapter extends BaseAdapter {
 
   async fetchSymbols() {
     try {
-      const res = await this.fetchWithTimeout(`${REST_URL}/api/v1/futures/market/tickers`);
+      // Use trading_pairs to get only valid tradeable symbols
+      const res = await this.fetchWithTimeout(`${REST_URL}/api/v1/futures/market/trading_pairs`);
       const data = await res.json();
       if (data.code === 0 && data.data) {
         this.symbols = data.data
-          .filter(i => {
-            const sym = i.symbol || '';
-            return sym.match(/USD[TCA]?$|CUSD$|XUSD$|EUSD$|HUSD$|MUSD$|BUSD$|KUSD$|AUSD$/);
-          })
-          .map(i => i.symbol);
-        this.log(`Fetched ${this.symbols.length} symbols`);
+          .filter(i => i.symbolStatus === 'OPEN')
+          .map(i => i.symbol)
+          .filter(sym => sym.match(/USD[TCA]?$|CUSD$|XUSD$|EUSD$|HUSD$|MUSD$|BUSD$|KUSD$|AUSD$/));
+        this.log(`Fetched ${this.symbols.length} valid symbols`);
       }
     } catch (e) {
       console.error('[BitunixAdapter] Failed to fetch symbols:', e.message);

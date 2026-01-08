@@ -331,7 +331,7 @@ module.exports = function(app) {
     try {
       const hub = getHub();
       const exchange = String(request.params.exchange).toLowerCase();
-      const tickers = hub.getTickers(exchange);
+      const tickers = await hub.getTickers(exchange);
       return { exchange, count: tickers.length, tickers };
     } catch (e) {
       app.log.error(e, 'Failed to fetch tickers');

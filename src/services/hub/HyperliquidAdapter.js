@@ -26,11 +26,14 @@ class HyperliquidAdapter extends BaseAdapter {
       });
       const data = await res.json();
       if (data && data.universe) {
-        this.symbols = data.universe.map((u, idx) => {
-          this.assetToIndex.set(u.name, idx);
-          return u.name;
-        });
-        this.log(`Fetched ${this.symbols.length} symbols`);
+        // Filter out delisted assets
+        this.symbols = data.universe
+          .filter(u => !u.isDelisted)
+          .map((u, idx) => {
+            this.assetToIndex.set(u.name, idx);
+            return u.name;
+          });
+        this.log(`Fetched ${this.symbols.length} valid symbols`);
       }
     } catch (e) {
       console.error('[HyperliquidAdapter] Failed to fetch symbols:', e.message);
@@ -55,6 +58,8 @@ class HyperliquidAdapter extends BaseAdapter {
     if (channel === 'allMids') {
       if (data.mids) {
         Object.entries(data.mids).forEach(([coin, price]) => {
+          // Skip spot tokens (start with @) - only want perps
+          if (coin.startsWith('@')) return;
           this.onDataCallback({
             exchange: 'hyperliquid',
             channel: 'tickers',
