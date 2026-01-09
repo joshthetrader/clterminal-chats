@@ -118,7 +118,7 @@ module.exports = function(app) {
     try {
       if (storage.pgClient) {
         const result = await storage.pgClient.query(
-          `SELECT id, source_name, source_username, text, url, followers, coin, symbols, is_retweet, is_quote, is_reply,
+          `SELECT id, source_name, source_username, text, url, followers, coin, symbols, suggestions, is_retweet, is_quote, is_reply,
                   EXTRACT(EPOCH FROM created_at) * 1000 as created_ms,
                   EXTRACT(EPOCH FROM COALESCE(received_at, created_at)) * 1000 as received_ms
            FROM news_items
@@ -135,6 +135,7 @@ module.exports = function(app) {
           followers: Number(r.followers || 0),
           coin: r.coin || null,
           symbols: Array.isArray(r.symbols) ? r.symbols : (typeof r.symbols === 'string' ? JSON.parse(r.symbols) : []),
+          suggestions: r.suggestions ? (Array.isArray(r.suggestions) ? r.suggestions : (typeof r.suggestions === 'string' ? JSON.parse(r.suggestions) : r.suggestions)) : null,
           isRetweet: !!r.is_retweet,
           isQuote: !!r.is_quote,
           isReply: !!r.is_reply,

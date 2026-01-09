@@ -175,6 +175,7 @@ async function initPostgres() {
   await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS trade_stop_loss TEXT`);
   await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS coin TEXT`);
   await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS symbols JSONB`);
+  await pgClient.query(`ALTER TABLE news_items ADD COLUMN IF NOT EXISTS suggestions JSONB`);
   // Order sharing columns
   await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS is_order BOOLEAN DEFAULT FALSE`);
   await pgClient.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS order_sym TEXT`);

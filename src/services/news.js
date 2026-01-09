@@ -71,10 +71,39 @@ function normalizePhoenix(msg) {
     ) || null;
 
     const url = pickFirst(msg?.url, msg?.tweetUrl, msg?.link) || null;
-    const createdAt = msg?.createdAt || msg?.receivedAt || Date.now();
+    
+    // Use TreeOfAlpha's 'time' field for timestamp
+    const createdAt = msg?.time || msg?.createdAt || msg?.receivedAt || Date.now();
 
-    const coin = pickFirst(msg?.coin, msg?.symbol, (Array.isArray(msg?.symbols) && msg.symbols[0]));
-    const symbols = Array.isArray(msg?.symbols) ? msg.symbols : (coin ? [coin] : []);
+    // Extract coins from suggestions array (TreeOfAlpha format)
+    let coin = pickFirst(msg?.coin, msg?.symbol);
+    let symbols = [];
+    let suggestions = null;
+    
+    // Preserve full suggestions array from TreeOfAlpha
+    // Format: [{ coin: "GALA", found: [...], symbols: [{ exchange, symbol }] }]
+    if (Array.isArray(msg?.suggestions) && msg.suggestions.length > 0) {
+      suggestions = msg.suggestions;
+      // Also extract coin names for simple symbols array
+      const suggestionCoins = msg.suggestions
+        .map(s => s?.coin)
+        .filter(Boolean);
+      symbols = [...new Set(suggestionCoins)];
+      if (!coin && suggestionCoins.length > 0) {
+        coin = suggestionCoins[0];
+      }
+    }
+    
+    // Fallback: check top-level symbols array
+    if (Array.isArray(msg?.symbols)) {
+      symbols = [...new Set([...symbols, ...msg.symbols])];
+      if (!coin) coin = msg.symbols[0];
+    }
+    
+    // Fallback: if we have a coin but no symbols, create array
+    if (coin && symbols.length === 0) {
+      symbols = [coin];
+    }
 
     return {
       id: msg?._id || msg?.noticeId || nanoid(),
@@ -82,12 +111,13 @@ function normalizePhoenix(msg) {
       name,
       text,
       createdAt,
-      receivedAt: msg?.receivedAt || createdAt,
+      receivedAt: msg?.rt || msg?.receivedAt || createdAt, // Use 'rt' field for received time
       followers: Number(msg?.followers || 0),
       icon,
       url,
       coin: coin || null,
       symbols,
+      suggestions, // Full suggestions array with exchange-specific symbols
       images: Array.isArray(msg?.images) ? msg.images : [],
       isRetweet: !!msg?.isRetweet,
       isQuote: !!msg?.isQuote,
@@ -98,10 +128,9 @@ function normalizePhoenix(msg) {
   }
 }
 
-// Broadcast news item to connected clients (LEAN version - removes detectedTokens)
+// Broadcast news item to connected clients
 function broadcastNewsItem(item) {
   try {
-    // Send only essential fields to reduce bandwidth by ~30%
     const leanItem = {
       id: item.id,
       username: item.username,
@@ -109,8 +138,8 @@ function broadcastNewsItem(item) {
       text: item.text,
       createdAt: item.createdAt,
       url: item.url,
-      symbols: item.symbols || []
-      // Removed: receivedAt, followers, images, isRetweet, isQuote, isReply, coin, icon
+      symbols: item.symbols || [],
+      suggestions: item.suggestions || null // Full suggestions with exchange-specific symbols
     };
     const data = JSON.stringify({ item: leanItem });
     for (const client of newsClients) {
@@ -155,11 +184,12 @@ function pushNews(item, pgClient, memoryNews) {
   if (pgClient) {
     try {
       const images = Array.isArray(item.images) ? JSON.stringify(item.images) : JSON.stringify([]);
+      const suggestions = item.suggestions ? JSON.stringify(item.suggestions) : null;
       const createdAt = item.createdAt ? new Date(item.createdAt) : new Date();
       const receivedAt = item.receivedAt ? new Date(item.receivedAt) : createdAt;
       pgClient.query(
-        `INSERT INTO news_items (id, source_name, source_username, text, url, followers, images, coin, symbols, is_retweet, is_quote, is_reply, created_at, received_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO news_items (id, source_name, source_username, text, url, followers, images, coin, symbols, suggestions, is_retweet, is_quote, is_reply, created_at, received_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING`,
         [
           String(item.id),
           item.name || null,
@@ -170,6 +200,7 @@ function pushNews(item, pgClient, memoryNews) {
           images,
           item.coin || null,
           JSON.stringify(item.symbols || []),
+          suggestions,
           !!item.isRetweet,
           !!item.isQuote,
           !!item.isReply,
