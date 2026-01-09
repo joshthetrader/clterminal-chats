@@ -141,7 +141,7 @@ module.exports = function(app) {
           isReply: !!r.is_reply,
           createdAt: Number(r.created_ms) || Date.now(),
           receivedAt: Number(r.received_ms) || Number(r.created_ms) || Date.now()
-        })).reverse();
+        })); // Return newest-first (matches query ORDER BY created_at DESC)
         
         // Update cache
         newsCache = { data: items, ts: now };
@@ -149,6 +149,7 @@ module.exports = function(app) {
         reply.header('X-News-Cache', 'MISS');
         return { items: items.slice(0, limit) };
       }
+      // Memory fallback: slice last N items and reverse to get newest-first
       const items = storage.memoryNews.slice(-limit).reverse();
       return { items };
     } catch (e) {
